@@ -288,6 +288,41 @@ function isActiveJobStatus(status) {
   return status === "queued" || status === "running";
 }
 
+/** Portable liveness probe. ESRCH => dead; EPERM => alive (exists, not ours). */
+function isWorkerAlive(pid) {
+  if (!pid || pid <= 0) return false; // no pid recorded -> cannot be alive
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return Boolean(err && err.code === "EPERM"); // exists but not ours -> alive
+  }
+}
+
+/**
+ * Mark a dead-pid job failed: write state.json (what the gate reads) and mirror
+ * the per-job file so status/result readers stay consistent.
+ */
+function reconcileDeadJob(workspaceRoot, job) {
+  const patch = {
+    id: job.id,
+    status: "failed",
+    pid: null,
+    errorMessage: "Worker process not alive; reconciled by resume gate.",
+    completedAt: nowIso()
+  };
+  // upsertJob writes state.json, which is what the gate (and resolution) reads.
+  upsertJob(workspaceRoot, patch);
+  // Best-effort: keep the per-job file consistent so /codex:status and result
+  // readers don't show a stale "running". The state.json write above is the
+  // authoritative un-stick; a per-job write failure is non-fatal.
+  try {
+    writeJobFile(workspaceRoot, job.id, { ...job, ...patch });
+  } catch {
+    // ignore: state.json write is authoritative
+  }
+}
+
 function getCurrentClaudeSessionId() {
   return process.env[SESSION_ID_ENV] ?? null;
 }
@@ -337,7 +372,16 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
   const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
   if (activeTask) {
-    throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
+    if (isWorkerAlive(activeTask.pid)) {
+      throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
+    }
+    // Worker pid is dead -> the "running" record is a zombie. Reconcile it so it
+    // never blocks the gate again, then fall through to normal resolution.
+    reconcileDeadJob(workspaceRoot, activeTask);
+    // Reflect the reconcile in the in-memory snapshot too, so the resolution
+    // below sees a non-active job in THIS call (not only on the next one).
+    activeTask.status = "failed";
+    activeTask.pid = null;
   }
 
   const trackedTask = findLatestResumableTaskJob(visibleJobs);

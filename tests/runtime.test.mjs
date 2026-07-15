@@ -156,6 +156,7 @@ test("setup reports not ready when app-server config read fails", () => {
 test("review renders a no-findings result from app-server review/start", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
   installFakeCodex(binDir);
   initGitRepo(repo);
   fs.mkdirSync(path.join(repo, "src"));
@@ -173,6 +174,8 @@ test("review renders a no-findings result from app-server review/start", () => {
   assert.match(result.stdout, /Reviewed uncommitted changes/);
   assert.match(result.stdout, /No material issues found/);
   assert.deepEqual(readPersistedJob(repo).resolved, FAKE_RESOLVED_SETTINGS);
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastThreadStart.sandbox, "read-only");
 });
 
 test("task runs when the active provider does not require OpenAI login", () => {
@@ -387,6 +390,7 @@ test("review accepts the quoted raw argument style for built-in base-branch revi
 test("adversarial review renders structured findings over app-server turn/start", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
   installFakeCodex(binDir);
   initGitRepo(repo);
   fs.mkdirSync(path.join(repo, "src"));
@@ -403,6 +407,8 @@ test("adversarial review renders structured findings over app-server turn/start"
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Missing empty-state guard/);
   assert.deepEqual(readPersistedJob(repo).resolved, FAKE_RESOLVED_SETTINGS);
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastThreadStart.sandbox, "read-only");
 });
 
 test("adversarial review accepts the same base-branch targeting as review", () => {
@@ -501,6 +507,7 @@ test("review logs reasoning summaries and review output to the job log", () => {
 test("task --resume-last resumes the latest persisted task thread", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
   installFakeCodex(binDir);
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
@@ -521,6 +528,8 @@ test("task --resume-last resumes the latest persisted task thread", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, "Resumed the prior run.\nFollow-up prompt accepted.\n");
   assert.deepEqual(readPersistedJob(repo).resolved, FAKE_RESOLVED_SETTINGS);
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastThreadResume.sandbox, null);
 });
 
 test("task-resume-candidate returns the latest rescue thread from the current session", () => {
@@ -721,6 +730,7 @@ test("session start hook exports the Claude session id, transcript path, and plu
 test("write task output focuses on the Codex result without generic follow-up hints", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
   installFakeCodex(binDir);
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
@@ -734,6 +744,8 @@ test("write task output focuses on the Codex result without generic follow-up hi
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, "Handled the requested task.\nTask prompt accepted.\n");
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastThreadStart.sandbox, "workspace-write");
 });
 
 test("task --resume acts like --resume-last without leaking the flag into the prompt", () => {
@@ -800,6 +812,7 @@ test("task forwards model selection and reasoning effort to app-server turn/star
 
   assert.equal(result.status, 0, result.stderr);
   const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastThreadStart.sandbox, null);
   assert.equal(fakeState.lastTurnStart.model, "gpt-5.3-codex-spark");
   assert.equal(fakeState.lastTurnStart.effort, "low");
   assert.deepEqual(readPersistedJob(repo).resolved, {
@@ -969,16 +982,17 @@ test("task using the shared broker still completes when Codex spawns subagents",
   assert.equal(result.stdout, "Handled the requested task.\nTask prompt accepted.\n");
 });
 
-test("task --background enqueues a detached worker and exposes per-job status", async () => {
+test("task --background preserves --read-only through the detached worker", async () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
+  const fakeStatePath = path.join(binDir, "fake-codex-state.json");
   installFakeCodex(binDir, "slow-task");
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
   run("git", ["add", "README.md"], { cwd: repo });
   run("git", ["commit", "-m", "init"], { cwd: repo });
 
-  const launched = run("node", [SCRIPT, "task", "--background", "--json", "investigate the failing test"], {
+  const launched = run("node", [SCRIPT, "task", "--background", "--read-only", "--json", "investigate the failing test"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
@@ -1030,6 +1044,63 @@ test("task --background enqueues a detached worker and exposes per-job status", 
   assert.deepEqual(resultPayload.job.resolved, FAKE_RESOLVED_SETTINGS);
   assert.deepEqual(resultPayload.storedJob.resolved, FAKE_RESOLVED_SETTINGS);
   assert.match(resultPayload.storedJob.rendered, /Handled the requested task/);
+  const fakeState = JSON.parse(fs.readFileSync(fakeStatePath, "utf8"));
+  assert.equal(fakeState.lastThreadStart.sandbox, "read-only");
+});
+
+test("task --read-only pins the app-server thread sandbox", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "task", "--read-only", "inspect the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastThreadStart.sandbox, "read-only");
+});
+
+test("task --read-only pins resumed app-server threads", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const firstRun = run("node", [SCRIPT, "task", "initial task"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(firstRun.status, 0, firstRun.stderr);
+
+  const result = run("node", [SCRIPT, "task", "--read-only", "--resume-last", "read-only follow up"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastThreadResume.sandbox, "read-only");
+});
+
+test("task rejects --write with --read-only", () => {
+  const result = run("node", [SCRIPT, "task", "--write", "--read-only", "inspect the failing test"], {
+    cwd: ROOT
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Choose either --write or --read-only\./);
 });
 
 test("review rejects focus text because it is native-review only", () => {
@@ -2030,6 +2101,7 @@ test("stop hook runs a stop-time review task and blocks on findings when the rev
   assert.match(fakeState.lastTurnStart.prompt, /<compact_output_contract>/i);
   assert.match(fakeState.lastTurnStart.prompt, /Only review the work from the previous Claude turn/i);
   assert.match(fakeState.lastTurnStart.prompt, /I completed the refactor and updated the retry logic\./);
+  assert.equal(fakeState.lastThreadStart.sandbox, "read-only");
 
   const status = run("node", [SCRIPT, "status"], {
     cwd: repo,

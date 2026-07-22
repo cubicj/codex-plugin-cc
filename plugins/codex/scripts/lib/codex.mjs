@@ -82,6 +82,15 @@ function buildResumeParams(threadId, cwd, options = {}) {
   };
 }
 
+function enforceReadOnlySandbox(requestedSandbox, resolvedSandbox) {
+  if (requestedSandbox !== "read-only" || resolvedSandbox?.type === "readOnly") {
+    return;
+  }
+  throw new Error(
+    "A read-only sandbox was requested, but the Codex app-server kept a write-capable sandbox for this thread. Refusing to start the turn. Rerun without --resume-last to start a fresh thread, or drop --read-only."
+  );
+}
+
 /** @returns {UserInput[]} */
 function buildTurnInput(prompt) {
   return [{ type: "text", text: prompt, text_elements: [] }];
@@ -1128,6 +1137,7 @@ export async function runAppServerTurn(cwd, options = {}) {
       });
     }
 
+    enforceReadOnlySandbox(options.sandbox, response.sandbox);
     const threadId = response.thread.id;
     let resolved = {
       model: response.model,
@@ -1171,6 +1181,7 @@ export async function runAppServerTurn(cwd, options = {}) {
     return {
       status: buildResultStatus(turnState),
       threadId,
+      sandbox: response.sandbox ?? null,
       turnId: turnState.turnId,
       resolved,
       finalMessage: turnState.lastAgentMessage,

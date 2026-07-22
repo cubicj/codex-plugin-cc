@@ -748,6 +748,30 @@ test("write task output focuses on the Codex result without generic follow-up hi
   assert.equal(fakeState.lastThreadStart.sandbox, "workspace-write");
 });
 
+test("task persists config-driven write capability and shows review hints", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "config-write-sandbox");
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "task", "fix the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const persistedJob = readPersistedJob(repo);
+  assert.equal(persistedJob.write, true);
+
+  const status = run("node", [SCRIPT, "status", persistedJob.id], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /Review changes: \/codex:review --wait/);
+});
+
 test("task --resume acts like --resume-last without leaking the flag into the prompt", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
@@ -1092,6 +1116,30 @@ test("task --read-only pins resumed app-server threads", () => {
   assert.equal(result.status, 0, result.stderr);
   const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
   assert.equal(fakeState.lastThreadResume.sandbox, "read-only");
+});
+
+test("task --read-only refuses a resumed write-capable app-server thread", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "resume-ignores-sandbox");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const firstRun = run("node", [SCRIPT, "task", "initial task"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(firstRun.status, 0, firstRun.stderr);
+
+  const result = run("node", [SCRIPT, "task", "--read-only", "--resume-last", "read-only follow up"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /read-only/i);
 });
 
 test("task rejects --write with --read-only", () => {

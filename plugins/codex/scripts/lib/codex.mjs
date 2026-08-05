@@ -661,7 +661,7 @@ async function withDirectAppServer(cwd, fn) {
   }
 }
 
-function resolveCodexHome() {
+export function resolveCodexHome() {
   return path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
 }
 

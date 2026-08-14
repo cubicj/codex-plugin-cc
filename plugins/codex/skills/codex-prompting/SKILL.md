@@ -1,12 +1,12 @@
 ---
 name: codex-prompting
-description: Internal guidance for composing Codex and GPT-5.4 prompts for coding, review, diagnosis, and research tasks inside the Codex Claude Code plugin
+description: Internal guidance for composing Codex prompts for coding, review, diagnosis, and research tasks inside the Codex Claude Code plugin
 user-invocable: false
 ---
 
-# GPT-5.4 Prompting
+# Codex Prompting
 
-Use this skill when `codex:codex-rescue` needs to ask Codex or another GPT-5.4-based workflow for help.
+Use this skill when `codex:codex-rescue` needs to ask Codex for help.
 
 Prompt Codex like an operator, not a collaborator. Keep prompts compact and block-structured with XML tags. State the task, the output contract, the follow-through defaults, and the small set of extra constraints that matter.
 
@@ -18,6 +18,7 @@ Core rules:
 - Use XML tags consistently so the prompt has stable internal structure.
 
 Default prompt recipe:
+- Worker envelope: start with the marker line `[Claude-Orchestrated Task]` and include the mandatory `<language_contract>` for Korean live in-session communication and English controller-consumed output.
 - `<task>`: the concrete job and the relevant repository or failure context.
 - `<structured_output_contract>` or `<compact_output_contract>`: exact shape, ordering, and brevity requirements.
 - `<default_follow_through_policy>`: what Codex should do by default instead of asking routine questions.
@@ -33,7 +34,9 @@ When to add blocks:
 How to choose prompt shape:
 - Use built-in `review` or `adversarial-review` commands when the job is reviewing local git changes. Those prompts already carry the review contract.
 - Use `task` when the task is diagnosis, planning, research, or implementation and you need to control the prompt more directly.
-- Use `task --resume-last` for follow-up instructions on the same Codex thread. Send only the delta instruction instead of restating the whole prompt unless the direction changed materially.
+- For background orchestration, dispatch each job once with `task --background`, then assign exactly one watcher using `status <job-id> --wait` for that job.
+- Use `task --resume-last` as a same-Claude-session convenience for follow-up instructions. Jobs are filtered to the current Claude session, so it fails when no resumable task is visible there.
+- Use `task --resume-thread <thread-id>` as the durable cross-session route. For either resume form, send only the delta instruction unless the direction changed materially.
 
 Working rules:
 - Prefer explicit prompt contracts over vague nudges.
@@ -43,11 +46,13 @@ Working rules:
 - Keep claims anchored to observed evidence. If something is a hypothesis, say so.
 
 Prompt assembly checklist:
-1. Define the exact task and scope in `<task>`.
-2. Choose the smallest output contract that still makes the answer easy to use.
-3. Decide whether Codex should keep going by default or stop for missing high-risk details.
-4. Add verification, grounding, and safety tags only where the task needs them.
-5. Remove redundant instructions before sending the prompt.
+1. Start the worker envelope with `[Claude-Orchestrated Task]`.
+2. Define the exact task and scope in `<task>`.
+3. Add `<language_contract>` with Korean for live in-session communication and English for controller-consumed output.
+4. Choose the smallest output contract that still makes the answer easy to use.
+5. Decide whether Codex should keep going by default or stop for missing high-risk details.
+6. Add verification, grounding, and safety tags only where the task needs them.
+7. Remove redundant instructions before sending the prompt.
 
 Reusable blocks live in [references/prompt-blocks.md](references/prompt-blocks.md).
 Concrete end-to-end templates live in [references/codex-prompt-recipes.md](references/codex-prompt-recipes.md).

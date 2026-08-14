@@ -1,11 +1,13 @@
 ---
 description: Show active and recent Codex jobs for this repository, including review-gate status
-argument-hint: '[job-id] [--wait] [--timeout-ms <ms>] [--all]'
+argument-hint: '[job-id] [--wait] [--timeout-ms <ms>] [--all] [--json]'
 disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
 
 !`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" status "$ARGUMENTS"`
+
+With `--json`, resolved job settings may include `model`, `modelProvider`, `reasoningEffort`, and `sandbox`.
 
 If the user did not pass a job ID:
 - Render the command output as a single Markdown table for the current and past runs in this session.

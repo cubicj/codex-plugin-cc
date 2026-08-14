@@ -1,7 +1,21 @@
 # Prompt Blocks
 
-Use these blocks selectively when composing Codex or GPT-5.4 prompts.
+Use these blocks selectively when composing Codex prompts.
 Wrap each block in the XML tag shown in its heading.
+
+## Worker Envelope
+
+### `language_contract`
+
+Use at the start of every controller-dispatched worker prompt.
+
+```text
+[Claude-Orchestrated Task]
+<language_contract>
+Use Korean for live in-session communication.
+Use English for controller-consumed output, including the final report.
+</language_contract>
+```
 
 ## Core Wrapper
 
@@ -84,8 +98,10 @@ Use when Codex might otherwise guess.
 
 ```xml
 <missing_context_gating>
-Do not guess missing repository facts.
-If required context is absent, retrieve it with tools or state exactly what remains unknown.
+Do not stop to ask routine questions.
+Retrieve missing repository facts with tools when possible.
+When uncertainty remains, state the assumption taken and proceed, or record the uncertainty in the final report.
+Abort only when ambiguity would make an irreversible or destructive action unsafe.
 </missing_context_gating>
 ```
 

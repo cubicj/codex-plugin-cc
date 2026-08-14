@@ -87,7 +87,7 @@ function enforceReadOnlySandbox(requestedSandbox, resolvedSandbox) {
     return;
   }
   throw new Error(
-    "A read-only sandbox was requested, but the Codex app-server kept a write-capable sandbox for this thread. Refusing to start the turn. Rerun without --resume-last to start a fresh thread, or drop --read-only."
+    "A read-only sandbox was requested, but the Codex app-server kept a write-capable sandbox for this thread. Refusing to start the turn. Rerun without a resume flag to start a fresh thread, or drop --read-only."
   );
 }
 

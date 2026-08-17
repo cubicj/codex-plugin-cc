@@ -132,15 +132,25 @@ export function getWorkingTreeState(cwd) {
   };
 }
 
+function ensureCommitRef(cwd, baseRef) {
+  const result = git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${baseRef}^{commit}`]);
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`base ${baseRef} not found in this repository`);
+  }
+}
+
 export function resolveReviewTarget(cwd, options = {}) {
   ensureGitRepository(cwd);
 
   const requestedScope = options.scope ?? "auto";
   const baseRef = options.base ?? null;
-  const state = getWorkingTreeState(cwd);
   const supportedScopes = new Set(["auto", "working-tree", "branch"]);
 
   if (baseRef) {
+    ensureCommitRef(cwd, baseRef);
     return {
       mode: "branch",
       label: `branch diff against ${baseRef}`,
@@ -148,6 +158,8 @@ export function resolveReviewTarget(cwd, options = {}) {
       explicit: true
     };
   }
+
+  const state = getWorkingTreeState(cwd);
 
   if (requestedScope === "working-tree") {
     return {

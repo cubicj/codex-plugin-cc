@@ -84,6 +84,19 @@ test("resolveReviewTarget honors explicit base overrides", () => {
   assert.equal(target.baseRef, "main");
 });
 
+test("resolveReviewTarget rejects explicit bases that do not resolve to commits", () => {
+  const cwd = makeTempDir();
+  initGitRepo(cwd);
+  fs.writeFileSync(path.join(cwd, "app.js"), "console.log('v1');\n");
+  run("git", ["add", "app.js"], { cwd });
+  run("git", ["commit", "-m", "init"], { cwd });
+
+  assert.throws(
+    () => resolveReviewTarget(cwd, { base: "missing-base" }),
+    /base missing-base not found in this repository/
+  );
+});
+
 test("resolveReviewTarget requires an explicit base when no default branch can be inferred", () => {
   const cwd = makeTempDir();
   initGitRepo(cwd);

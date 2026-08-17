@@ -366,6 +366,26 @@ test("review accepts the quoted raw argument style for built-in base-branch revi
   assert.match(result.stdout, /No material issues found/);
 });
 
+test("review rejects a missing explicit base before starting Codex", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const fakeCodexState = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run(process.execPath, [SCRIPT, "review", "--base", "missing-base"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /base missing-base not found in this repository/);
+  assert.equal(fs.existsSync(fakeCodexState), false);
+});
+
 test("adversarial review renders structured findings over app-server turn/start", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

@@ -66,12 +66,12 @@ function measureCombinedGitOutputBytes(cwd, argSets, maxBytes) {
   return totalBytes;
 }
 
-function buildBranchComparison(cwd, baseRef) {
-  const mergeBase = gitChecked(cwd, ["merge-base", "HEAD", baseRef]).stdout.trim();
+function buildBranchComparison(cwd, baseCommit) {
+  const mergeBase = gitChecked(cwd, ["merge-base", "HEAD", baseCommit]).stdout.trim();
   return {
     mergeBase,
     commitRange: `${mergeBase}..HEAD`,
-    reviewRange: `${baseRef}...HEAD`
+    reviewRange: `${baseCommit}...HEAD`
   };
 }
 
@@ -133,13 +133,22 @@ export function getWorkingTreeState(cwd) {
 }
 
 function ensureCommitRef(cwd, baseRef) {
-  const result = git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${baseRef}^{commit}`]);
-  if (result.error) {
-    throw result.error;
+  const resolved = git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", baseRef]);
+  if (resolved.error) {
+    throw resolved.error;
   }
-  if (result.status !== 0) {
+  if (resolved.status !== 0) {
     throw new Error(`base ${baseRef} not found in this repository`);
   }
+
+  const commit = git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${resolved.stdout.trim()}^{commit}`]);
+  if (commit.error) {
+    throw commit.error;
+  }
+  if (commit.status !== 0) {
+    throw new Error(`base ${baseRef} not found in this repository`);
+  }
+  return commit.stdout.trim();
 }
 
 export function resolveReviewTarget(cwd, options = {}) {
@@ -150,11 +159,12 @@ export function resolveReviewTarget(cwd, options = {}) {
   const supportedScopes = new Set(["auto", "working-tree", "branch"]);
 
   if (baseRef) {
-    ensureCommitRef(cwd, baseRef);
+    const baseCommit = ensureCommitRef(cwd, baseRef);
     return {
       mode: "branch",
       label: `branch diff against ${baseRef}`,
       baseRef,
+      baseCommit,
       explicit: true
     };
   }
@@ -273,7 +283,7 @@ function collectWorkingTreeContext(cwd, state, options = {}) {
 
 function collectBranchContext(cwd, baseRef, options = {}) {
   const includeDiff = options.includeDiff !== false;
-  const comparison = options.comparison ?? buildBranchComparison(cwd, baseRef);
+  const comparison = options.comparison ?? buildBranchComparison(cwd, ensureCommitRef(cwd, baseRef));
   const currentBranch = getCurrentBranch(cwd);
   const changedFiles = gitChecked(cwd, ["diff", "--name-only", comparison.commitRange]).stdout.trim().split("\n").filter(Boolean);
   const logOutput = gitChecked(cwd, ["log", "--oneline", "--decorate", comparison.commitRange]).stdout.trim();
@@ -334,7 +344,8 @@ export function collectReviewContext(cwd, target, options = {}) {
         diffBytes <= maxInlineDiffBytes);
     details = collectWorkingTreeContext(repoRoot, state, { includeDiff });
   } else {
-    const comparison = buildBranchComparison(repoRoot, target.baseRef);
+    const baseCommit = target.baseCommit ?? ensureCommitRef(repoRoot, target.baseRef);
+    const comparison = buildBranchComparison(repoRoot, baseCommit);
     const fileCount = gitChecked(repoRoot, ["diff", "--name-only", comparison.commitRange]).stdout.trim().split("\n").filter(Boolean).length;
     diffBytes = measureGitOutputBytes(
       repoRoot,

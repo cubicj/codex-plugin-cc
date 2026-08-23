@@ -356,14 +356,39 @@ test("review accepts the quoted raw argument style for built-in base-branch revi
   run("git", ["commit", "-m", "init"], { cwd: repo });
   fs.writeFileSync(path.join(repo, "src", "app.js"), "export const value = 2;\n");
 
-  const result = run("node", [SCRIPT, "review", "--base main"], {
+  const result = run(process.execPath, [SCRIPT, "review", "--base main"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
 
-  assert.equal(result.status, 0);
+  assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Reviewed changes against main/);
   assert.match(result.stdout, /No material issues found/);
+});
+
+test("review sends dash-leading explicit bases to app-server as canonical commits", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "app.js"), "console.log('base');\n");
+  run("git", ["add", "app.js"], { cwd: repo });
+  run("git", ["commit", "-m", "base"], { cwd: repo });
+  const baseCommit = run("git", ["rev-parse", "HEAD"], { cwd: repo, shell: false }).stdout.trim();
+  run("git", ["update-ref", "refs/heads/-release-baseline", baseCommit], { cwd: repo, shell: false });
+  run("git", ["checkout", "-b", "feature/test"], { cwd: repo });
+  fs.writeFileSync(path.join(repo, "app.js"), "console.log('feature');\n");
+  run("git", ["add", "app.js"], { cwd: repo });
+  run("git", ["commit", "-m", "feature"], { cwd: repo });
+
+  const result = run(process.execPath, [SCRIPT, "review", "--base", "-release-baseline"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /branch diff against -release-baseline/i);
+  assert.match(result.stdout, new RegExp(`Reviewed changes against ${baseCommit}\\.`));
 });
 
 test("review rejects a missing explicit base before starting Codex", () => {

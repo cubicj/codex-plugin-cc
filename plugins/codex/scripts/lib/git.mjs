@@ -91,12 +91,15 @@ export function getRepoRoot(cwd) {
   return gitChecked(cwd, ["rev-parse", "--show-toplevel"]).stdout.trim();
 }
 
-export function detectDefaultBranch(cwd) {
+function detectDefaultBranchTarget(cwd) {
   const symbolic = git(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD"]);
   if (symbolic.status === 0) {
     const remoteHead = symbolic.stdout.trim();
     if (remoteHead.startsWith("refs/remotes/origin/")) {
-      return remoteHead.replace("refs/remotes/origin/", "");
+      return {
+        baseRef: remoteHead.replace("refs/remotes/origin/", ""),
+        commitRef: remoteHead
+      };
     }
   }
 
@@ -104,15 +107,19 @@ export function detectDefaultBranch(cwd) {
   for (const candidate of candidates) {
     const local = git(cwd, ["show-ref", "--verify", "--quiet", `refs/heads/${candidate}`]);
     if (local.status === 0) {
-      return candidate;
+      return { baseRef: candidate, commitRef: candidate };
     }
     const remote = git(cwd, ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${candidate}`]);
     if (remote.status === 0) {
-      return `origin/${candidate}`;
+      return { baseRef: `origin/${candidate}`, commitRef: `refs/remotes/origin/${candidate}` };
     }
   }
 
   throw new Error("Unable to detect the repository default branch. Pass --base <ref> or use --scope working-tree.");
+}
+
+export function detectDefaultBranch(cwd) {
+  return detectDefaultBranchTarget(cwd).baseRef;
 }
 
 export function getCurrentBranch(cwd) {
@@ -151,11 +158,6 @@ function ensureCommitRef(cwd, baseRef) {
   return commit.stdout.trim();
 }
 
-function ensureDetectedBaseCommit(cwd, baseRef) {
-  const commitRef = baseRef.startsWith("-") ? `refs/remotes/origin/${baseRef}` : baseRef;
-  return ensureCommitRef(cwd, commitRef);
-}
-
 export function resolveReviewTarget(cwd, options = {}) {
   ensureGitRepository(cwd);
 
@@ -191,12 +193,14 @@ export function resolveReviewTarget(cwd, options = {}) {
   }
 
   if (requestedScope === "branch") {
-    const detectedBase = detectDefaultBranch(cwd);
+    const detected = detectDefaultBranchTarget(cwd);
+    const baseCommit = ensureCommitRef(cwd, detected.commitRef);
     return {
       mode: "branch",
-      label: `branch diff against ${detectedBase}`,
-      baseRef: detectedBase,
-      baseCommit: ensureDetectedBaseCommit(cwd, detectedBase),
+      label: `branch diff against ${detected.baseRef}`,
+      baseRef: detected.baseRef,
+      baseCommit,
+      nativeBaseRef: detected.baseRef.startsWith("-") ? baseCommit : detected.commitRef,
       explicit: true
     };
   }
@@ -209,12 +213,14 @@ export function resolveReviewTarget(cwd, options = {}) {
     };
   }
 
-  const detectedBase = detectDefaultBranch(cwd);
+  const detected = detectDefaultBranchTarget(cwd);
+  const baseCommit = ensureCommitRef(cwd, detected.commitRef);
   return {
     mode: "branch",
-    label: `branch diff against ${detectedBase}`,
-    baseRef: detectedBase,
-    baseCommit: ensureDetectedBaseCommit(cwd, detectedBase),
+    label: `branch diff against ${detected.baseRef}`,
+    baseRef: detected.baseRef,
+    baseCommit,
+    nativeBaseRef: detected.baseRef.startsWith("-") ? baseCommit : detected.commitRef,
     explicit: false
   };
 }

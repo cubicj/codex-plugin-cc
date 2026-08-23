@@ -391,6 +391,35 @@ test("review sends dash-leading explicit bases to app-server as canonical commit
   assert.match(result.stdout, new RegExp(`Reviewed changes against ${baseCommit}\\.`));
 });
 
+test("review sends dash-leading detected bases to app-server as canonical commits", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "app.js"), "console.log('base');\n");
+  run("git", ["add", "app.js"], { cwd: repo });
+  run("git", ["commit", "-m", "base"], { cwd: repo });
+  const baseCommit = run("git", ["rev-parse", "HEAD"], { cwd: repo, shell: false }).stdout.trim();
+  run("git", ["update-ref", "refs/remotes/origin/-release-baseline", baseCommit], { cwd: repo, shell: false });
+  run("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/-release-baseline"], {
+    cwd: repo,
+    shell: false
+  });
+  run("git", ["checkout", "-b", "feature/test"], { cwd: repo });
+  fs.writeFileSync(path.join(repo, "app.js"), "console.log('feature');\n");
+  run("git", ["add", "app.js"], { cwd: repo });
+  run("git", ["commit", "-m", "feature"], { cwd: repo });
+
+  const result = run(process.execPath, [SCRIPT, "review", "--scope", "branch"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /branch diff against -release-baseline/i);
+  assert.match(result.stdout, new RegExp(`Reviewed changes against ${baseCommit}\\.`));
+});
+
 test("review rejects a missing explicit base before starting Codex", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

@@ -151,6 +151,11 @@ function ensureCommitRef(cwd, baseRef) {
   return commit.stdout.trim();
 }
 
+function ensureDetectedBaseCommit(cwd, baseRef) {
+  const commitRef = baseRef.startsWith("-") ? `refs/remotes/origin/${baseRef}` : baseRef;
+  return ensureCommitRef(cwd, commitRef);
+}
+
 export function resolveReviewTarget(cwd, options = {}) {
   ensureGitRepository(cwd);
 
@@ -191,6 +196,7 @@ export function resolveReviewTarget(cwd, options = {}) {
       mode: "branch",
       label: `branch diff against ${detectedBase}`,
       baseRef: detectedBase,
+      baseCommit: ensureDetectedBaseCommit(cwd, detectedBase),
       explicit: true
     };
   }
@@ -208,6 +214,7 @@ export function resolveReviewTarget(cwd, options = {}) {
     mode: "branch",
     label: `branch diff against ${detectedBase}`,
     baseRef: detectedBase,
+    baseCommit: ensureDetectedBaseCommit(cwd, detectedBase),
     explicit: false
   };
 }

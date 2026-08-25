@@ -15,17 +15,37 @@ import {
 
 test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   const workspace = makeTempDir();
-  const stateDir = resolveStateDir(workspace);
+  const previousCodexPluginDataDir = process.env.CODEX_COMPANION_PLUGIN_DATA;
+  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
+  delete process.env.CODEX_COMPANION_PLUGIN_DATA;
+  delete process.env.CLAUDE_PLUGIN_DATA;
 
-  assert.equal(stateDir.startsWith(os.tmpdir()), true);
-  assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
-  assert.match(stateDir, new RegExp(`^${os.tmpdir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  try {
+    const stateDir = resolveStateDir(workspace);
+
+    assert.equal(stateDir.startsWith(os.tmpdir()), true);
+    assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
+    assert.match(stateDir, new RegExp(`^${os.tmpdir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  } finally {
+    if (previousCodexPluginDataDir == null) {
+      delete process.env.CODEX_COMPANION_PLUGIN_DATA;
+    } else {
+      process.env.CODEX_COMPANION_PLUGIN_DATA = previousCodexPluginDataDir;
+    }
+    if (previousPluginDataDir == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+    }
+  }
 });
 
 test("resolveStateDir falls back to CLAUDE_PLUGIN_DATA when it is provided", () => {
   const workspace = makeTempDir();
   const pluginDataDir = makeTempDir();
+  const previousCodexPluginDataDir = process.env.CODEX_COMPANION_PLUGIN_DATA;
   const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
+  delete process.env.CODEX_COMPANION_PLUGIN_DATA;
   process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
 
   try {
@@ -38,6 +58,11 @@ test("resolveStateDir falls back to CLAUDE_PLUGIN_DATA when it is provided", () 
       new RegExp(`^${path.join(pluginDataDir, "state").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
     );
   } finally {
+    if (previousCodexPluginDataDir == null) {
+      delete process.env.CODEX_COMPANION_PLUGIN_DATA;
+    } else {
+      process.env.CODEX_COMPANION_PLUGIN_DATA = previousCodexPluginDataDir;
+    }
     if (previousPluginDataDir == null) {
       delete process.env.CLAUDE_PLUGIN_DATA;
     } else {

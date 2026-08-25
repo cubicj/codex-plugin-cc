@@ -5,7 +5,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { makeTempDir } from "./helpers.mjs";
-import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../plugins/codex/scripts/lib/state.mjs";
+import {
+  resolveJobFile,
+  resolveJobLogFile,
+  resolveStateDir,
+  resolveStateFile,
+  saveState
+} from "../plugins/codex/scripts/lib/state.mjs";
 
 test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   const workspace = makeTempDir();
@@ -16,7 +22,7 @@ test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   assert.match(stateDir, new RegExp(`^${os.tmpdir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
 
-test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
+test("resolveStateDir falls back to CLAUDE_PLUGIN_DATA when it is provided", () => {
   const workspace = makeTempDir();
   const pluginDataDir = makeTempDir();
   const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
@@ -32,6 +38,89 @@ test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
       new RegExp(`^${path.join(pluginDataDir, "state").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
     );
   } finally {
+    if (previousPluginDataDir == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+    }
+  }
+});
+
+test("resolveStateDir prefers the Codex plugin data dir over another plugin's host-scoped value", () => {
+  const workspace = makeTempDir();
+  const codexPluginDataDir = makeTempDir();
+  const siblingPluginDataDir = makeTempDir();
+  const previousCodexPluginDataDir = process.env.CODEX_COMPANION_PLUGIN_DATA;
+  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CODEX_COMPANION_PLUGIN_DATA = codexPluginDataDir;
+  process.env.CLAUDE_PLUGIN_DATA = siblingPluginDataDir;
+
+  try {
+    const stateDir = resolveStateDir(workspace);
+
+    assert.equal(stateDir.startsWith(path.join(codexPluginDataDir, "state")), true);
+    assert.equal(stateDir.startsWith(path.join(siblingPluginDataDir, "state")), false);
+  } finally {
+    if (previousCodexPluginDataDir == null) {
+      delete process.env.CODEX_COMPANION_PLUGIN_DATA;
+    } else {
+      process.env.CODEX_COMPANION_PLUGIN_DATA = previousCodexPluginDataDir;
+    }
+    if (previousPluginDataDir == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+    }
+  }
+});
+
+test("saveState does not prune another plugin's job when the host-scoped data dir was overwritten", () => {
+  const workspace = makeTempDir();
+  const codexPluginDataDir = makeTempDir();
+  const siblingPluginDataDir = makeTempDir();
+  const previousCodexPluginDataDir = process.env.CODEX_COMPANION_PLUGIN_DATA;
+  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CODEX_COMPANION_PLUGIN_DATA = siblingPluginDataDir;
+  process.env.CLAUDE_PLUGIN_DATA = siblingPluginDataDir;
+
+  try {
+    const siblingStateFile = resolveStateFile(workspace);
+    const siblingJobFile = resolveJobFile(workspace, "sibling-job");
+    const siblingLogFile = resolveJobLogFile(workspace, "sibling-job");
+    const siblingState = {
+      version: 1,
+      config: { stopReviewGate: false },
+      jobs: [
+        {
+          id: "sibling-job",
+          status: "completed",
+          logFile: siblingLogFile,
+          createdAt: "2026-08-25T00:00:00.000Z",
+          updatedAt: "2026-08-25T00:00:00.000Z"
+        }
+      ]
+    };
+    fs.writeFileSync(siblingJobFile, '{"owner":"sibling"}\n', "utf8");
+    fs.writeFileSync(siblingLogFile, "sibling output\n", "utf8");
+    fs.writeFileSync(siblingStateFile, `${JSON.stringify(siblingState, null, 2)}\n`, "utf8");
+
+    process.env.CODEX_COMPANION_PLUGIN_DATA = codexPluginDataDir;
+    saveState(workspace, {
+      version: 1,
+      config: { stopReviewGate: false },
+      jobs: []
+    });
+
+    assert.deepEqual(JSON.parse(fs.readFileSync(siblingStateFile, "utf8")), siblingState);
+    assert.equal(fs.readFileSync(siblingJobFile, "utf8"), '{"owner":"sibling"}\n');
+    assert.equal(fs.readFileSync(siblingLogFile, "utf8"), "sibling output\n");
+    assert.equal(fs.existsSync(resolveStateFile(workspace)), true);
+  } finally {
+    if (previousCodexPluginDataDir == null) {
+      delete process.env.CODEX_COMPANION_PLUGIN_DATA;
+    } else {
+      process.env.CODEX_COMPANION_PLUGIN_DATA = previousCodexPluginDataDir;
+    }
     if (previousPluginDataDir == null) {
       delete process.env.CLAUDE_PLUGIN_DATA;
     } else {

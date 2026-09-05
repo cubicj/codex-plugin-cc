@@ -89,7 +89,7 @@ function printUsage() {
       "Usage:",
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
-      "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
+      "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [focus text]",
       "  node scripts/codex-companion.mjs task [--background] [--write] [--read-only] [--resume-last|--resume|--resume-thread <id>|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
@@ -446,6 +446,7 @@ async function executeReviewRun(request) {
   const result = await runAppServerTurn(context.repoRoot, {
     prompt,
     model: request.model,
+    effort: request.effort,
     sandbox: "read-only",
     outputSchema: readOutputSchema(REVIEW_SCHEMA),
     onProgress: request.onProgress,
@@ -755,12 +756,22 @@ async function handleReviewCommand(argv, config) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const model = normalizeRequestedModel(options.model);
   const focusText = positionals.join(" ").trim();
   const target = resolveReviewTarget(cwd, {
     base: options.base,
     scope: options.scope
   });
+
+  // Parsing --effort here made it a valid flag for the native `review` subcommand too,
+  // which shares this handler. The native branch never forwards effort, so the request
+  // was being silently ignored where it used to fall into focusText and be rejected.
+  // Fail closed: a caller must opt in, so a future one cannot inherit the silent drop.
+  if (options.effort !== undefined && !config.supportsEffort) {
+    throw new Error(
+      "`/codex:review` maps directly to the built-in reviewer and does not support `--effort`. Retry with `/codex:adversarial-review --effort " +
+        `${String(options.effort)}\` to choose a reasoning effort.`
+    );
+  }
 
   config.validateRequest?.(target, focusText);
   const metadata = buildReviewJobMetadata(config.reviewName, target);
@@ -779,7 +790,8 @@ async function handleReviewCommand(argv, config) {
         cwd,
         base: options.base,
         scope: options.scope,
-        model,
+        model: normalizeRequestedModel(options.model),
+        effort: normalizeReasoningEffort(options.effort),
         focusText,
         reviewName: config.reviewName,
         onProgress: progress
@@ -1088,7 +1100,8 @@ async function main() {
       break;
     case "adversarial-review":
       await handleReviewCommand(argv, {
-        reviewName: "Adversarial Review"
+        reviewName: "Adversarial Review",
+        supportsEffort: true
       });
       break;
     case "task":

@@ -166,7 +166,7 @@ export function parseTaskArgv(argv) {
 
 export function parseReviewArgv(argv) {
   return parseCommandInput(argv, {
-    valueOptions: ["base", "scope", "model", "cwd"],
+    valueOptions: ["base", "scope", "model", "cwd", "effort"],
     booleanOptions: ["json", "background", "wait"]
   });
 }

@@ -33,7 +33,7 @@ Command selection:
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
 - `--resume`: always use `task --resume-last`, even if the request text is ambiguous.
 - `--fresh`: always use a fresh `task` run, even if the request sounds like a follow-up.
-- `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+- `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. Not every model supports every value; Codex validates the value against the reasoning levels the selected model advertises.
 - `task --resume-last`: same-Claude-session convenience for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run. Jobs are filtered to the current Claude session, so it fails when no resumable task is visible there.
 - `task --resume-thread <thread-id>`: durable route for resuming a known Codex thread across Claude sessions.
 

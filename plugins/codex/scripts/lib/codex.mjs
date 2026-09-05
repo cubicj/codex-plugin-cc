@@ -1021,7 +1021,7 @@ export async function runAppServerReview(cwd, options = {}) {
     const response = await startThread(client, cwd, {
       model: options.model,
       sandbox: "read-only",
-      ephemeral: true,
+      ephemeral: false,
       threadName: options.threadName
     });
     const sourceThreadId = response.thread.id;

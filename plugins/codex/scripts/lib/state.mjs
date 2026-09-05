@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +12,11 @@ const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "codex-companion");
 const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
+const STATE_LOCK_WAIT_MS = 5000;
+const STATE_LOCK_STALE_MS = 30000;
+const STATE_LOCK_RETRY_MS = 10;
+const STATE_LOCK_RECLAIM_STALE_MS = 2000;
+const stateLockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
 
 function nowIso() {
   return new Date().toISOString();
@@ -98,7 +103,90 @@ function isNewerJob(candidate, incumbent) {
   return String(candidate.updatedAt ?? "").localeCompare(String(incumbent.updatedAt ?? "")) > 0;
 }
 
-export function saveState(cwd, state, options = {}) {
+function reclaimStateLock(lockFile) {
+  const reclaimFile = `${lockFile}.reclaim`;
+  let reclaimFd;
+  try {
+    reclaimFd = fs.openSync(reclaimFile, "wx");
+  } catch (error) {
+    if (error.code !== "EEXIST") {
+      throw error;
+    }
+    try {
+      if (Date.now() - fs.statSync(reclaimFile).mtimeMs > STATE_LOCK_RECLAIM_STALE_MS) {
+        fs.unlinkSync(reclaimFile);
+      }
+    } catch (guardError) {
+      if (guardError.code !== "ENOENT") {
+        throw guardError;
+      }
+    }
+    return;
+  }
+
+  try {
+    if (Date.now() - fs.statSync(lockFile).mtimeMs > STATE_LOCK_STALE_MS) {
+      fs.unlinkSync(lockFile);
+    }
+  } finally {
+    try {
+      fs.unlinkSync(reclaimFile);
+    } finally {
+      fs.closeSync(reclaimFd);
+    }
+  }
+}
+
+function withStateLock(cwd, action) {
+  ensureStateDir(cwd);
+  const lockFile = `${resolveStateFile(cwd)}.lock`;
+  const deadline = Date.now() + STATE_LOCK_WAIT_MS;
+  let lockFd;
+  while (lockFd === undefined) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for state lock: ${lockFile}`);
+    }
+    try {
+      lockFd = fs.openSync(lockFile, "wx");
+    } catch (error) {
+      if (error.code !== "EEXIST") {
+        throw error;
+      }
+      try {
+        const lock = fs.statSync(lockFile);
+        if (Date.now() - lock.mtimeMs > STATE_LOCK_STALE_MS) {
+          reclaimStateLock(lockFile);
+        }
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+        continue;
+      }
+      Atomics.wait(stateLockWaitBuffer, 0, 0, STATE_LOCK_RETRY_MS);
+    }
+  }
+
+  try {
+    return action();
+  } finally {
+    try {
+      const ownedLock = fs.fstatSync(lockFd);
+      const currentLock = fs.statSync(lockFile);
+      if (ownedLock.dev === currentLock.dev && ownedLock.ino === currentLock.ino) {
+        fs.unlinkSync(lockFile);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+    } finally {
+      fs.closeSync(lockFd);
+    }
+  }
+}
+
+function saveStateLocked(cwd, state, options) {
   const previousJobs = loadState(cwd).jobs;
   ensureStateDir(cwd);
 
@@ -144,14 +232,27 @@ export function saveState(cwd, state, options = {}) {
     removeFileIfExists(job.logFile);
   }
 
-  fs.writeFileSync(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
+  const stateFile = resolveStateFile(cwd);
+  const temporaryFile = `${stateFile}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryFile, `${JSON.stringify(nextState, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+    fs.renameSync(temporaryFile, stateFile);
+  } finally {
+    removeFileIfExists(temporaryFile);
+  }
   return nextState;
 }
 
+export function saveState(cwd, state, options = {}) {
+  return withStateLock(cwd, () => saveStateLocked(cwd, state, options));
+}
+
 export function updateState(cwd, mutate, options = {}) {
-  const state = loadState(cwd);
-  mutate(state);
-  return saveState(cwd, state, options);
+  return withStateLock(cwd, () => {
+    const state = loadState(cwd);
+    mutate(state);
+    return saveStateLocked(cwd, state, options);
+  });
 }
 
 export function generateJobId(prefix = "job") {

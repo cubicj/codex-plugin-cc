@@ -24,7 +24,7 @@ import {
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
-import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
+import { binaryAvailable, isWorkerAlive, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
   generateJobId,
@@ -280,17 +280,6 @@ function renderStatusPayload(report, asJson) {
 
 function isActiveJobStatus(status) {
   return status === "queued" || status === "running";
-}
-
-/** Portable liveness probe. ESRCH => dead; EPERM => alive (exists, not ours). */
-function isWorkerAlive(pid) {
-  if (!pid || pid <= 0) return false; // no pid recorded -> cannot be alive
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return Boolean(err && err.code === "EPERM"); // exists but not ours -> alive
-  }
 }
 
 /**

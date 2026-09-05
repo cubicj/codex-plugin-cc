@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +14,7 @@ import {
   resolveStateDir,
   resolveStateFile,
   saveState,
+  updateState,
   upsertJob,
   writeJobFile
 } from "../plugins/codex/scripts/lib/state.mjs";
@@ -281,4 +284,208 @@ test("saveState removes ledger entries and artifacts for explicitly removed jobs
   assert.equal(fs.existsSync(resolveJobLogFile(workspace, "job-drop")), false);
   assert.equal(fs.existsSync(resolveJobFile(workspace, "job-keep")), true);
   assert.equal(fs.existsSync(resolveJobLogFile(workspace, "job-keep")), true);
+});
+
+async function waitForBarrier(predicate) {
+  const deadline = Date.now() + 10000;
+  while (!predicate()) {
+    assert.ok(Date.now() < deadline, "State writer did not reach its barrier");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+for (const operation of ["upsertJob", "saveState", "setConfig"]) {
+  test(`${operation} serializes cross-process state updates`, async (t) => {
+    const workspace = makeTempDir();
+    const barriers = makeTempDir();
+    const children = [];
+    t.after(() => {
+      for (const child of children) {
+        if (child.exitCode === null) {
+          child.kill();
+        }
+      }
+    });
+    const reached = (id, phase) => fs.existsSync(path.join(barriers, `${id}.${phase}`));
+    const release = (id) => fs.writeFileSync(path.join(barriers, `${id}.release`), "release");
+    const startWriter = (id) => {
+      const child = spawn(process.execPath, [
+        fileURLToPath(new URL("./state-writer-fixture.mjs", import.meta.url)),
+        workspace,
+        barriers,
+        id,
+        operation
+      ], { env: process.env });
+      children.push(child);
+      let output = "";
+      child.stderr.on("data", (data) => { output += data; });
+      return new Promise((resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", (code) => resolve({ code, output }));
+      });
+    };
+
+    const writerA = startWriter("job-A");
+    await waitForBarrier(() => reached("job-A", "ready"));
+    const writerB = startWriter("job-B");
+    await waitForBarrier(() => reached("job-B", "ready") || reached("job-B", "waiting"));
+    release("job-A");
+    const resultA = await writerA;
+    assert.equal(resultA.code, 0, resultA.output);
+    await waitForBarrier(() => reached("job-B", "ready"));
+    release("job-B");
+    const resultB = await writerB;
+    assert.equal(resultB.code, 0, resultB.output);
+
+    const saved = loadState(workspace);
+    if (operation === "setConfig") {
+      assert.equal(saved.config["job-A"], true);
+      assert.equal(saved.config["job-B"], true);
+    } else {
+      assert.deepEqual(saved.jobs.map((job) => job.id).sort(), ["job-A", "job-B"]);
+    }
+    assert.equal(fs.existsSync(`${resolveStateFile(workspace)}.lock`), false);
+  });
+}
+
+test("updateState releases its lock when mutation throws", () => {
+  const workspace = makeTempDir();
+  assert.throws(() => updateState(workspace, () => { throw new Error("mutation failed"); }), /mutation failed/);
+  upsertJob(workspace, { id: "after-error", status: "queued" });
+  assert.deepEqual(loadState(workspace).jobs.map((job) => job.id), ["after-error"]);
+  assert.equal(fs.existsSync(`${resolveStateFile(workspace)}.lock`), false);
+});
+
+test("updateState reclaims an abandoned lock", () => {
+  const workspace = makeTempDir();
+  const lockFile = `${resolveStateFile(workspace)}.lock`;
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  fs.writeFileSync(lockFile, "");
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lockFile, old, old);
+  upsertJob(workspace, { id: "after-stale-lock", status: "queued" });
+  assert.equal(loadState(workspace).jobs[0].id, "after-stale-lock");
+  assert.equal(fs.existsSync(lockFile), false);
+});
+
+test("saveState publishes atomically and preserves state when rename fails", (t) => {
+  const workspace = makeTempDir();
+  upsertJob(workspace, { id: "original", status: "queued" });
+  const stateFile = resolveStateFile(workspace);
+  const original = fs.readFileSync(stateFile, "utf8");
+  let renameAttempts = 0;
+  const rename = t.mock.method(fs, "renameSync", (source, destination) => {
+    assert.equal(destination, stateFile);
+    assert.equal(path.dirname(source), path.dirname(stateFile));
+    assert.equal(fs.readFileSync(stateFile, "utf8"), original);
+    assert.deepEqual(JSON.parse(fs.readFileSync(source, "utf8")).jobs.map((job) => job.id).sort(), ["next", "original"]);
+    renameAttempts += 1;
+    throw new Error("rename failed");
+  });
+  assert.throws(() => upsertJob(workspace, { id: "next", status: "queued" }), /rename failed/);
+  assert.equal(renameAttempts, 1);
+  assert.equal(fs.readFileSync(stateFile, "utf8"), original);
+  assert.deepEqual(fs.readdirSync(path.dirname(stateFile)).sort(), ["jobs", "state.json"]);
+  rename.mock.restore();
+  upsertJob(workspace, { id: "retry", status: "queued" });
+  assert.deepEqual(loadState(workspace).jobs.map((job) => job.id).sort(), ["original", "retry"]);
+});
+
+
+test("updateState times out without changing a live lock or state", (t) => {
+  const workspace = makeTempDir();
+  upsertJob(workspace, { id: "original", status: "queued" });
+  const stateFile = resolveStateFile(workspace);
+  const original = fs.readFileSync(stateFile, "utf8");
+  const lockFile = `${stateFile}.lock`;
+  fs.writeFileSync(lockFile, "held");
+  let now = Date.now();
+  const clock = t.mock.method(Date, "now", () => {
+    now += 1000;
+    return now;
+  });
+  assert.throws(() => upsertJob(workspace, { id: "blocked", status: "queued" }), /Timed out waiting for state lock/);
+  clock.mock.restore();
+  assert.equal(fs.readFileSync(lockFile, "utf8"), "held");
+  assert.equal(fs.readFileSync(stateFile, "utf8"), original);
+  fs.unlinkSync(lockFile);
+});
+
+test("updateState does not release a replacement lock", () => {
+  const workspace = makeTempDir();
+  const lockFile = `${resolveStateFile(workspace)}.lock`;
+  assert.throws(() => updateState(workspace, () => {
+    fs.unlinkSync(lockFile);
+    fs.writeFileSync(lockFile, "replacement");
+    throw new Error("ownership lost");
+  }), /ownership lost/);
+  assert.equal(fs.readFileSync(lockFile, "utf8"), "replacement");
+  fs.unlinkSync(lockFile);
+});
+
+test("saveState releases its lock and temporary file when writing fails", (t) => {
+  const workspace = makeTempDir();
+  upsertJob(workspace, { id: "original", status: "queued" });
+  const stateFile = resolveStateFile(workspace);
+  const original = fs.readFileSync(stateFile, "utf8");
+  const writeFile = fs.writeFileSync;
+  t.mock.method(fs, "writeFileSync", (file, ...args) => {
+    if (typeof file === "string" && file.startsWith(`${stateFile}.`) && file.endsWith(".tmp")) {
+      writeFile(file, "partial");
+      throw new Error("write failed");
+    }
+    return writeFile(file, ...args);
+  });
+  assert.throws(() => upsertJob(workspace, { id: "next", status: "queued" }), /write failed/);
+  assert.equal(fs.readFileSync(stateFile, "utf8"), original);
+  assert.deepEqual(fs.readdirSync(path.dirname(stateFile)).sort(), ["jobs", "state.json"]);
+});
+
+
+test("updateState bounds contention on the stale-lock reclamation guard", (t) => {
+  const workspace = makeTempDir();
+  upsertJob(workspace, { id: "original", status: "queued" });
+  const stateFile = resolveStateFile(workspace);
+  const original = fs.readFileSync(stateFile, "utf8");
+  const lockFile = `${stateFile}.lock`;
+  const reclaimFile = `${lockFile}.reclaim`;
+  fs.writeFileSync(lockFile, "stale");
+  fs.writeFileSync(reclaimFile, "held");
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lockFile, old, old);
+  const future = new Date(Date.now() + 3600000);
+  fs.utimesSync(reclaimFile, future, future);
+  let now = Date.now();
+  const clock = t.mock.method(Date, "now", () => {
+    now += 1000;
+    return now;
+  });
+  assert.throws(() => upsertJob(workspace, { id: "blocked", status: "queued" }), /Timed out waiting for state lock/);
+  clock.mock.restore();
+  assert.equal(fs.readFileSync(lockFile, "utf8"), "stale");
+  assert.equal(fs.readFileSync(reclaimFile, "utf8"), "held");
+  assert.equal(fs.readFileSync(stateFile, "utf8"), original);
+  fs.unlinkSync(reclaimFile);
+  upsertJob(workspace, { id: "retry", status: "queued" });
+  assert.deepEqual(loadState(workspace).jobs.map((job) => job.id).sort(), ["original", "retry"]);
+  assert.equal(fs.existsSync(reclaimFile), false);
+});
+
+test("updateState reclaims an abandoned reclamation guard", () => {
+  const workspace = makeTempDir();
+  upsertJob(workspace, { id: "original", status: "queued" });
+  const stateFile = resolveStateFile(workspace);
+  const lockFile = `${stateFile}.lock`;
+  const reclaimFile = `${lockFile}.reclaim`;
+  fs.writeFileSync(lockFile, "stale");
+  fs.writeFileSync(reclaimFile, "orphaned");
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lockFile, old, old);
+  fs.utimesSync(reclaimFile, old, old);
+
+  upsertJob(workspace, { id: "retry", status: "queued" });
+
+  assert.deepEqual(loadState(workspace).jobs.map((job) => job.id).sort(), ["original", "retry"]);
+  assert.equal(fs.existsSync(lockFile), false);
+  assert.equal(fs.existsSync(reclaimFile), false);
 });

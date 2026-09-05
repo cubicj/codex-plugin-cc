@@ -499,6 +499,42 @@ rl.on("line", (line) => {
 
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
 
+        if (BEHAVIOR === "transport-loss") {
+          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+          send({
+            method: "item/completed",
+            params: {
+              threadId: thread.id,
+              turnId,
+              item: { type: "reasoning", id: "reasoning_" + turnId, summary: ["Progress before transport loss."] }
+            }
+          });
+          setTimeout(() => process.exit(0), 100);
+          break;
+        }
+
+        if (["final-error-close", "error-final-close", "retryable-error-final-inferred"].includes(BEHAVIOR)) {
+          const finalMessage = {
+            method: "item/completed",
+            params: {
+              threadId: thread.id,
+              turnId,
+              item: { type: "agentMessage", id: "msg_" + turnId, text: "Final answer before close.", phase: "final_answer" }
+            }
+          };
+          const error = {
+            method: "error",
+            params: { threadId: thread.id, turnId, error: terminalError, willRetry: BEHAVIOR === "retryable-error-final-inferred" }
+          };
+          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+          const notifications = BEHAVIOR === "final-error-close" ? [finalMessage, error] : [error, finalMessage];
+          process.stdout.write(notifications.map((notification) => JSON.stringify(notification)).join("\\n") + "\\n");
+          if (BEHAVIOR !== "retryable-error-final-inferred") {
+            setTimeout(() => process.exit(0), 20);
+          }
+          break;
+        }
+
         if (BEHAVIOR === "terminal-error" || BEHAVIOR === "terminal-error-then-completed") {
           send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
           send({ method: "error", params: { threadId: thread.id, turnId, error: terminalError, willRetry: false } });

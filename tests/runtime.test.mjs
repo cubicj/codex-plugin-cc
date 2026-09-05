@@ -2790,6 +2790,117 @@ test("setup and status honor --cwd when reading shared session runtime", () => {
   assert.equal(payload.sessionRuntime.endpoint, "unix:/tmp/fake-broker.sock");
 });
 
+for (const transport of ["broker", "direct"]) {
+  test(`task fails when the ${transport} transport is lost before turn completion`, () => {
+    const repo = makeTempDir();
+    const binDir = makeTempDir();
+    installFakeCodex(binDir, "transport-loss");
+    const env = buildEnv(binDir);
+    if (transport === "direct") {
+      env.CODEX_COMPANION_APP_SERVER_ENDPOINT = `unix:${path.join(repo, "missing.sock")}`;
+    }
+
+    const result = run("node", [SCRIPT, "task", "trigger transport loss"], {
+      cwd: repo,
+      env,
+      timeout: 5000
+    });
+
+    assert.equal(result.signal, null, result.stderr);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stdout, /Codex app-server connection was lost before the turn completed/);
+    const stored = readPersistedJob(repo);
+    assert.equal(stored.status, "failed");
+    assert.equal(stored.result.status, 1);
+    assert.equal(stored.result.error.message, "Codex app-server connection was lost before the turn completed.");
+    assert.match(fs.readFileSync(stored.logFile, "utf8"), /Progress before transport loss/);
+    assert.equal(Boolean(loadBrokerSession(repo)), transport === "broker");
+  });
+
+  test(`background task settles as failed when the ${transport} transport is lost`, () => {
+    const repo = makeTempDir();
+    const binDir = makeTempDir();
+    installFakeCodex(binDir, "transport-loss");
+    const env = buildEnv(binDir);
+    if (transport === "direct") {
+      env.CODEX_COMPANION_APP_SERVER_ENDPOINT = `unix:${path.join(repo, "missing.sock")}`;
+    }
+
+    const launched = run("node", [SCRIPT, "task", "--background", "--json", "trigger transport loss"], {
+      cwd: repo,
+      env,
+      timeout: 5000
+    });
+    assert.equal(launched.status, 0, launched.stderr);
+    const { jobId } = JSON.parse(launched.stdout);
+    const watched = run("node", [SCRIPT, "status", jobId, "--wait", "--timeout-ms", "2500", "--json"], {
+      cwd: repo,
+      env,
+      timeout: 5000
+    });
+
+    assert.equal(watched.signal, null, watched.stderr);
+    const payload = JSON.parse(watched.stdout);
+    assert.equal(payload.job.status, "failed");
+    assert.equal(payload.waitTimedOut, false);
+    const stored = readPersistedJob(repo, jobId);
+    assert.equal(stored.status, "failed");
+    assert.equal(stored.result.status, 1);
+    assert.equal(stored.result.error.message, "Codex app-server connection was lost before the turn completed.");
+    assert.ok(stored.completedAt);
+    assert.match(fs.readFileSync(stored.logFile, "utf8"), /Progress before transport loss/);
+    assert.equal(Boolean(loadBrokerSession(repo)), transport === "broker");
+
+    const result = run("node", [SCRIPT, "result", jobId, "--json"], { cwd: repo, env, timeout: 5000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Codex app-server connection was lost before the turn completed/);
+  });
+}
+
+for (const behavior of ["final-error-close", "error-final-close"]) {
+  test(`task preserves explicit failure instead of inferred success for ${behavior}`, () => {
+    const repo = makeTempDir();
+    const binDir = makeTempDir();
+    installFakeCodex(binDir, behavior);
+
+    const result = run("node", [SCRIPT, "task", "check error precedence"], {
+      cwd: repo,
+      env: buildEnv(binDir),
+      timeout: 5000
+    });
+
+    assert.equal(result.signal, null, result.stderr);
+    assert.equal(result.status, 1, result.stderr);
+    const stored = readPersistedJob(repo);
+    assert.equal(stored.status, "failed");
+    assert.equal(stored.result.status, 1);
+    assert.equal(stored.result.error.message, "git merge-base rejected a tree object");
+    assert.match(result.stderr, /git merge-base rejected a tree object/);
+    const log = fs.readFileSync(stored.logFile, "utf8");
+    assert.doesNotMatch(log, /Turn completion inferred/);
+    assert.match(log, /Final answer before close/);
+  });
+}
+
+test("task infers success after a retryable error and final answer", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "retryable-error-final-inferred");
+
+  const result = run("node", [SCRIPT, "task", "check retryable error precedence"], {
+    cwd: repo,
+    env: buildEnv(binDir),
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "Final answer before close.\n");
+  const stored = readPersistedJob(repo);
+  assert.equal(stored.status, "completed");
+  assert.equal(stored.result.status, 0);
+  assert.match(fs.readFileSync(stored.logFile, "utf8"), /Turn completion inferred/);
+});
+
 test("task terminates when app-server emits a non-retryable turn error", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

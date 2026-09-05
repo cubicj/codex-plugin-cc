@@ -620,6 +620,18 @@ function applyTurnNotification(state, message) {
 async function captureTurn(client, threadId, startRequest, options = {}) {
   const state = createTurnCaptureState(threadId, options);
   const previousHandler = client.notificationHandler;
+  let active = true;
+
+  client.exitPromise.then(() => {
+    if (active) {
+      failTurn(state, {
+        message: "Codex app-server connection was lost before the turn completed.",
+        codexErrorInfo: null,
+        additionalDetails: null,
+        misalignment: null
+      });
+    }
+  });
 
   client.setNotificationHandler((message) => {
     if (!state.turnId) {
@@ -666,6 +678,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
 
     return await state.completion;
   } finally {
+    active = false;
     clearCompletionTimer(state);
     client.setNotificationHandler(previousHandler ?? null);
   }

@@ -93,6 +93,16 @@ export function saveBrokerSession(cwd, session) {
   fs.writeFileSync(resolveBrokerStateFile(cwd), `${JSON.stringify(session, null, 2)}\n`, "utf8");
 }
 
+export function recordedBrokerPid(session) {
+  if (!session) {
+    return null;
+  }
+  if (session.pidFile && !fs.existsSync(session.pidFile)) {
+    return null;
+  }
+  return session.pid ?? null;
+}
+
 export function clearBrokerSession(cwd) {
   const stateFile = resolveBrokerStateFile(cwd);
   if (fs.existsSync(stateFile)) {
@@ -123,7 +133,7 @@ export async function ensureBrokerSession(cwd, options = {}) {
       pidFile: existing.pidFile ?? null,
       logFile: existing.logFile ?? null,
       sessionDir: existing.sessionDir ?? null,
-      pid: existing.pid ?? null,
+      pid: recordedBrokerPid(existing),
       killProcess: options.killProcess ?? terminateProcessTree
     });
     clearBrokerSession(cwd);

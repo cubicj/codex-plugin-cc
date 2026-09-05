@@ -7,6 +7,8 @@ import { execFileSync } from "node:child_process";
 
 import {
   ensureBrokerSession,
+  recordedBrokerPid,
+  saveBrokerSession,
   teardownBrokerSession
 } from "../plugins/codex/scripts/lib/broker-lifecycle.mjs";
 
@@ -108,4 +110,51 @@ test("ensureBrokerSession does not orphan a broker that never becomes ready", as
       }
     }
   }
+});
+
+test("recordedBrokerPid drops the pid once the broker has removed its own pid file", () => {
+  const { dir, pidFile, logFile } = tempSessionFiles();
+
+  assert.equal(recordedBrokerPid({ pidFile, logFile, pid: 4242 }), 4242);
+
+  fs.unlinkSync(pidFile);
+  assert.equal(recordedBrokerPid({ pidFile, logFile, pid: 4242 }), null);
+  assert.equal(recordedBrokerPid({ pidFile: null, pid: 4242 }), 4242);
+  assert.equal(recordedBrokerPid(null), null);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("ensureBrokerSession does not signal the recorded pid of a broker that exited on its own", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "cxc-cwd-"));
+  const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), "cxc-stale-"));
+  const stubPath = path.join(cwd, "never-ready-broker.mjs");
+  fs.writeFileSync(stubPath, "setTimeout(() => {}, 30_000);\n");
+  const killed = [];
+
+  saveBrokerSession(cwd, {
+    endpoint: `unix:${path.join(sessionDir, "broker.sock")}`,
+    pidFile: path.join(sessionDir, "broker.pid"),
+    logFile: path.join(sessionDir, "broker.log"),
+    sessionDir,
+    pid: 4242
+  });
+
+  const session = await ensureBrokerSession(cwd, {
+    timeoutMs: 250,
+    scriptPath: stubPath,
+    killProcess: (pid) => killed.push(pid)
+  });
+
+  assert.equal(session, null);
+  assert.equal(killed.includes(4242), false, "a pid whose pid file is already gone must not be signalled");
+  assert.equal(killed.length, 1, "the never-ready replacement broker is still torn down");
+
+  for (const pid of killed) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+  }
+  fs.rmSync(cwd, { recursive: true, force: true });
+  fs.rmSync(sessionDir, { recursive: true, force: true });
 });

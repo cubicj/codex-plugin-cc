@@ -34,6 +34,7 @@ When to add blocks:
 How to choose prompt shape:
 - Use built-in `review` or `adversarial-review` commands when the job is reviewing local git changes. Those prompts already carry the review contract.
 - Use `task` when the task is diagnosis, planning, research, or implementation and you need to control the prompt more directly.
+- On every fresh `task` dispatch, pass a short `--thread-title <text>` describing the work. Treat it as a runtime control and strip it and its value from the task text.
 - For background orchestration, dispatch each job once with `task --background`, then assign exactly one watcher using `status <job-id> --wait` for that job.
 - Use `task --resume-last` as a same-Claude-session convenience for follow-up instructions. Jobs are filtered to the current Claude session, so it fails when no resumable task is visible there.
 - Use `task --resume-thread <thread-id>` as the durable cross-session route. For either resume form, send only the delta instruction unless the direction changed materially.

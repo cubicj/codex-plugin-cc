@@ -192,6 +192,102 @@ test("task thread names ignore leading recommended_plugins context", () => {
   assert.equal(fakeState.threads[0].name, "Codex Companion Task: Fix the flaky login test");
 });
 
+for (const { label, title, expected } of [
+  { label: "explicit title", title: "Login regression", expected: "Login regression" },
+  { label: "normalized whitespace", title: "  Login\n  regression\tfix  ", expected: "Login regression fix" },
+  { label: "whitespace-only fallback", title: " \n\t ", expected: "Fix the flaky login test" },
+  { label: "56-character title", title: "x".repeat(56), expected: "x".repeat(56) },
+  { label: "truncated title", title: "x".repeat(57), expected: `${"x".repeat(53)}...` }
+]) {
+  test(`task --thread-title names a foreground thread with ${label}`, () => {
+    const repo = makeTempDir();
+    const binDir = makeTempDir();
+    const statePath = path.join(binDir, "fake-codex-state.json");
+    installFakeCodex(binDir);
+    initGitRepo(repo);
+
+    const prompt = "Fix the flaky login test";
+    const result = run("node", [SCRIPT, "task", "--thread-title", title, prompt], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    assert.equal(fakeState.threads[0].name, `Codex Companion Task: ${expected}`);
+    assert.equal(fakeState.lastTurnStart.prompt, prompt);
+    assert.equal(readPersistedJob(repo).title, "Codex Task");
+  });
+}
+
+test("task --background preserves --thread-title through the detached worker", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const title = "  Login\n  regression\tfix  ";
+  const prompt = "Fix the flaky login test";
+  const launched = run("node", [SCRIPT, "task", "--background", "--thread-title", title, "--json", prompt], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(launched.status, 0, launched.stderr);
+  const payload = JSON.parse(launched.stdout);
+  assert.equal(payload.title, "Codex Task");
+  assert.equal(payload.summary, prompt);
+  assert.equal(readPersistedJob(repo, payload.jobId).request.threadTitle, title);
+
+  const waited = run("node", [SCRIPT, "status", payload.jobId, "--wait", "--timeout-ms", "15000", "--json"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(waited.status, 0, waited.stderr);
+  assert.equal(JSON.parse(waited.stdout).job.status, "completed");
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.threads[0].name, "Codex Companion Task: Login regression fix");
+  assert.equal(fakeState.lastTurnStart.prompt, prompt);
+});
+
+for (const resumeFlag of ["--resume-last", "--resume", "--resume-thread"]) {
+  test(`task ${resumeFlag} renames only when --thread-title is nonempty`, () => {
+    const repo = makeTempDir();
+    const binDir = makeTempDir();
+    const statePath = path.join(binDir, "fake-codex-state.json");
+    installFakeCodex(binDir);
+    initGitRepo(repo);
+    const env = buildEnv(binDir);
+
+    const firstRun = run("node", [SCRIPT, "task", "--json", "initial task"], { cwd: repo, env });
+    assert.equal(firstRun.status, 0, firstRun.stderr);
+    const threadId = JSON.parse(firstRun.stdout).threadId;
+    const resumeArgs = resumeFlag === "--resume-thread" ? [resumeFlag, threadId] : [resumeFlag];
+
+    for (const { titleArgs, expected } of [
+      { titleArgs: [], expected: "initial task" },
+      { titleArgs: ["--thread-title", "  Login\n regression fix  "], expected: "Login regression fix" },
+      { titleArgs: [], expected: "Login regression fix" },
+      { titleArgs: ["--thread-title", " \t\n "], expected: "Login regression fix" }
+    ]) {
+      const result = run("node", [SCRIPT, "task", ...resumeArgs, ...titleArgs, "--json", "follow up"], {
+        cwd: repo,
+        env
+      });
+
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).threadId, threadId);
+      const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+      assert.equal(fakeState.threads.length, 1);
+      assert.equal(fakeState.threads[0].name, `Codex Companion Task: ${expected}`);
+      assert.equal(fakeState.lastTurnStart.prompt, "follow up");
+      assert.equal(readPersistedJob(repo).title, "Codex Resume");
+    }
+  });
+}
+
 test("task runs when the active provider does not require OpenAI login", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

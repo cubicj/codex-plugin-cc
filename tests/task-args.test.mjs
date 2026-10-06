@@ -46,6 +46,34 @@ test("task boolean flags still parse alongside a prompt", () => {
   assert.equal(positionals.join(" "), "refactor the payment module");
 });
 
+test("task parses --thread-title from separate argv tokens without adding it to the prompt", () => {
+  const { options, positionals } = parseTaskArgv([
+    "--thread-title", "Fix login tests", "investigate the flaky login test"
+  ]);
+
+  assert.equal(options["thread-title"], "Fix login tests");
+  assert.deepEqual(positionals, ["investigate the flaky login test"]);
+});
+
+test("task parses a quoted multi-word --thread-title inside a raw argument string", () => {
+  const { options, positionals } = parseTaskArgv([
+    '--thread-title "Fix login tests" investigate the flaky login test'
+  ]);
+
+  assert.equal(options["thread-title"], "Fix login tests");
+  assert.equal(positionals.join(" "), "investigate the flaky login test");
+});
+
+test("task prompt keeps `--title` tokens instead of treating them as the thread title", () => {
+  const { options, positionals } = parseTaskArgv([
+    'open a PR with gh pr create --title "Fix login" --body done'
+  ]);
+
+  assert.equal(options["thread-title"], undefined);
+  assert.equal(options.title, undefined);
+  assert.equal(positionals.join(" "), "open a PR with gh pr create --title Fix login --body done");
+});
+
 test("review focus text keeps `-m` tokens but still honors --model", () => {
   const swallowed = parseReviewArgv(["check the -m pytest invocation in ci"]);
   assert.equal(swallowed.options.model, undefined);

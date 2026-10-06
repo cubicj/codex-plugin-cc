@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Codex rescue subagent
-argument-hint: "[--background|--wait] [--read-only|--write] [--resume|--resume-thread <thread-id>|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [what Codex should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--read-only|--write] [--resume|--resume-thread <thread-id>|--fresh] [--thread-title <text>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [what Codex should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -18,6 +18,7 @@ Execution mode:
 - If neither flag is present, default to foreground.
 - `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
 - `--model`, `--effort`, `--read-only`, and `--write` are runtime-selection flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.
+- `--thread-title <text>` is a runtime control that sets or renames the Codex thread. Preserve it and its value for the forwarded `task` call, and strip both from the natural-language task text.
 - With neither sandbox flag, the task inherits `sandbox_mode` from `config.toml`; on the operator's machine this resolves to `danger-full-access`. `--read-only` pins a read-only sandbox; `--write` pins `workspace-write`.
 - If the request includes `--resume`, do not ask whether to continue. The user already chose.
 - If the request includes `--resume-thread <thread-id>`, do not ask whether to continue. The user supplied the durable cross-session thread route.

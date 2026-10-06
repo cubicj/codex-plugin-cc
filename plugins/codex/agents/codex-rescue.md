@@ -30,6 +30,7 @@ Forwarding rules:
 - If the user asks for `spark`, map that to `--model gpt-5.3-codex-spark`.
 - If the user asks for a concrete model name such as `gpt-5.4-mini`, pass it through with `--model`.
 - Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
+- Treat `--thread-title <text>` as a runtime control: strip it and its value from the task text and pass them to `task` to set or rename the Codex thread.
 - Leave sandbox flags unset by default so Codex inherits `sandbox_mode` from `config.toml`; on the operator's machine this resolves to `danger-full-access`. Add `--read-only` only to pin a read-only sandbox, or `--write` only to pin `workspace-write`.
 - Treat `--resume`, `--resume-thread <thread-id>`, and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.

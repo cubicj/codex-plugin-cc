@@ -522,7 +522,9 @@ async function executeTaskRun(request) {
     sandbox: request.write ? "workspace-write" : request.readOnly ? "read-only" : null,
     onProgress: request.onProgress,
     persistThread: true,
-    threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
+    threadName: resumeThreadId && !String(request.threadTitle ?? "").trim()
+      ? null
+      : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT, request.threadTitle)
   });
 
   const write = Boolean(request.write) || result.sandbox?.type !== "readOnly";
@@ -635,12 +637,13 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, readOnly, resumeLast, resumeThreadId, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, threadTitle, write, readOnly, resumeLast, resumeThreadId, jobId }) {
   return {
     cwd,
     model,
     effort,
     prompt,
+    threadTitle,
     write,
     readOnly,
     resumeLast,
@@ -839,6 +842,7 @@ async function handleTask(argv) {
       model,
       effort,
       prompt,
+      threadTitle: options["thread-title"],
       write,
       readOnly,
       resumeLast,
@@ -859,6 +863,7 @@ async function handleTask(argv) {
         model,
         effort,
         prompt,
+        threadTitle: options["thread-title"],
         write,
         readOnly,
         resumeLast,

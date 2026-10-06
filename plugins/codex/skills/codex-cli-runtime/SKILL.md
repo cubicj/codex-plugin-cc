@@ -28,6 +28,7 @@ Command selection:
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
 - If the forwarded request includes `--model`, normalize `spark` to `gpt-5.3-codex-spark` and pass it through to `task`.
 - If the forwarded request includes `--effort`, pass it through to `task`.
+- If the forwarded request includes `--thread-title <text>`, strip both tokens from the task text and pass them through to `task` as a runtime control. It sets or renames the thread to `Codex Companion Task: <text>` after trimming, collapsing whitespace, and shortening to 56 characters; a blank title uses the existing naming behavior.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--resume-thread <thread-id>`, strip both tokens from the task text and pass them through to `task`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.

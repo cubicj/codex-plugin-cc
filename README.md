@@ -142,6 +142,8 @@ Use it when you want Codex to:
 
 It supports `--background`, `--wait`, `--resume`, and `--fresh`. If you omit `--resume` and `--fresh`, the plugin can offer to continue the latest rescue thread for this repo.
 
+`--thread-title <text>` is a runtime control that sets or renames the Codex thread to `Codex Companion Task: <text>`. The title is trimmed, whitespace is collapsed, and text over 56 characters is shortened with `...`. A blank title keeps the existing naming behavior. The flag and its value are stripped from the task text sent to Codex.
+
 Examples:
 
 ```bash

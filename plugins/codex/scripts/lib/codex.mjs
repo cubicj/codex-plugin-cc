@@ -113,12 +113,12 @@ function looksLikeVerificationCommand(command) {
   );
 }
 
-function buildTaskThreadName(prompt) {
+function buildTaskThreadName(prompt, threadTitle) {
   const titleSource = String(prompt ?? "").replace(
     /^\s*<recommended_plugins>[\s\S]*?<\/recommended_plugins>\s*/i,
     ""
   );
-  const excerpt = shorten(titleSource, 56);
+  const excerpt = shorten(threadTitle, 56) || shorten(titleSource, 56);
   return excerpt ? `${TASK_THREAD_PREFIX}: ${excerpt}` : TASK_THREAD_PREFIX;
 }
 
@@ -803,20 +803,24 @@ async function requestExternalAgentSessionImport(client, params) {
   }
 }
 
+async function setThreadName(client, threadId, threadName) {
+  try {
+    await client.request("thread/name/set", { threadId, name: threadName });
+  } catch (err) {
+    // Only suppress "unknown variant/method" errors from older CLI versions
+    // that don't support thread/name/set. Rethrow auth, network, or server errors.
+    const msg = String(err?.message ?? err ?? "");
+    if (!msg.includes("unknown variant") && !msg.includes("unknown method")) {
+      throw err;
+    }
+  }
+}
+
 async function startThread(client, cwd, options = {}) {
   const response = await client.request("thread/start", buildThreadParams(cwd, options));
   const threadId = response.thread.id;
   if (options.threadName) {
-    try {
-      await client.request("thread/name/set", { threadId, name: options.threadName });
-    } catch (err) {
-      // Only suppress "unknown variant/method" errors from older CLI versions
-      // that don't support thread/name/set. Rethrow auth, network, or server errors.
-      const msg = String(err?.message ?? err ?? "");
-      if (!msg.includes("unknown variant") && !msg.includes("unknown method")) {
-        throw err;
-      }
-    }
+    await setThreadName(client, threadId, options.threadName);
   }
   return response;
 }
@@ -1190,6 +1194,9 @@ export async function runAppServerTurn(cwd, options = {}) {
         sandbox: options.sandbox,
         ephemeral: false
       });
+      if (options.threadName) {
+        await setThreadName(client, response.thread.id, options.threadName);
+      }
     } else {
       emitProgress(options.onProgress, "Starting Codex task thread.", "starting");
       response = await startThread(client, cwd, {
@@ -1281,8 +1288,8 @@ export async function findLatestTaskThread(cwd) {
   });
 }
 
-export function buildPersistentTaskThreadName(prompt) {
-  return buildTaskThreadName(prompt);
+export function buildPersistentTaskThreadName(prompt, threadTitle) {
+  return buildTaskThreadName(prompt, threadTitle);
 }
 
 // A model asked for JSON often wraps the reply in a markdown fence, which a

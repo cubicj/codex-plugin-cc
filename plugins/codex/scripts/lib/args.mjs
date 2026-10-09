@@ -4,6 +4,7 @@ export function parseArgs(argv, config = {}) {
   const aliasMap = config.aliasMap ?? {};
   const options = {};
   const positionals = [];
+  const unknownOptions = [];
   let passthrough = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -45,6 +46,7 @@ export function parseArgs(argv, config = {}) {
         continue;
       }
 
+      unknownOptions.push(token);
       positionals.push(token);
       continue;
     }
@@ -70,7 +72,7 @@ export function parseArgs(argv, config = {}) {
     positionals.push(token);
   }
 
-  return { options, positionals };
+  return { options, positionals, unknownOptions };
 }
 
 export function splitRawArgumentString(raw) {
@@ -142,13 +144,25 @@ export function normalizeArgv(argv) {
 }
 
 export function parseCommandInput(argv, config = {}) {
-  return parseArgs(normalizeArgv(argv), {
+  const parsed = parseArgs(normalizeArgv(argv), {
     ...config,
     aliasMap: {
       C: "cwd",
       ...(config.aliasMap ?? {})
     }
   });
+
+  // An unrecognised long option is still treated as a positional, because some
+  // commands take free-form text. Say so on stderr rather than swallowing it:
+  // a mistyped or unsupported flag would otherwise be silently folded into a
+  // prompt, and the run would look like it did what was asked.
+  for (const token of parsed.unknownOptions ?? []) {
+    console.warn(
+      `Warning: unrecognised option ${token}; treating it as text. It will be passed through verbatim, not interpreted as a flag.`
+    );
+  }
+
+  return parsed;
 }
 
 // Command argument schemas live here so the parser and its tests share one source

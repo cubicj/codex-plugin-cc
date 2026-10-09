@@ -44,6 +44,28 @@ test("formatCommandFailure surfaces the signal for a signal-killed command", () 
   assert.match(failure, /signal=SIGKILL/);
 });
 
+test("runCommand allows output larger than Node's default maxBuffer", () => {
+  const outputBytes = 2 * 1024 * 1024;
+  const result = runCommand(process.execPath, [
+    "-e",
+    `process.stdout.write("x".repeat(${outputBytes}))`
+  ]);
+
+  assert.equal(result.error, null);
+  assert.equal(result.status, 0);
+  assert.equal(Buffer.byteLength(result.stdout), outputBytes);
+});
+
+test("runCommand preserves an explicit maxBuffer override", () => {
+  const result = runCommand(
+    process.execPath,
+    ["-e", `process.stdout.write("x".repeat(${2 * 1024}))`],
+    { maxBuffer: 1024 }
+  );
+
+  assert.equal(result.error?.code, "ENOBUFS");
+});
+
 test("terminateProcessTree uses taskkill on Windows", () => {
   let captured = null;
   const outcome = terminateProcessTree(1234, {

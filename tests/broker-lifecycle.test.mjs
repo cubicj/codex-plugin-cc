@@ -13,7 +13,8 @@ import {
   recordedBrokerPid,
   saveBrokerSession,
   sendBrokerShutdown,
-  teardownBrokerSession
+  teardownBrokerSession,
+  waitForBrokerEndpoint
 } from "../plugins/codex/scripts/lib/broker-lifecycle.mjs";
 
 // The broker is spawned detached and unref'd, so it outlives the process that
@@ -180,4 +181,30 @@ test("sendBrokerShutdown returns when a broker accepts but never replies", async
   const startedAt = Date.now();
   await sendBrokerShutdown(`unix:${socketPath}`, 50);
   assert.ok(Date.now() - startedAt < 500);
+});
+
+function hangingConnection() {
+  return {
+    setTimeout() {},
+    on() {
+      return this;
+    },
+    removeAllListeners() {},
+    end() {},
+    destroy() {}
+  };
+}
+
+test("waitForBrokerEndpoint returns false when connect hangs past the timeout", { timeout: 2000 }, async (t) => {
+  const originalCreateConnection = net.createConnection;
+  net.createConnection = hangingConnection;
+  t.after(() => {
+    net.createConnection = originalCreateConnection;
+  });
+
+  const started = Date.now();
+  const ready = await waitForBrokerEndpoint("unix:/tmp/codex-hung-broker.sock", 150);
+
+  assert.equal(ready, false);
+  assert.equal(Date.now() - started < 1000, true);
 });

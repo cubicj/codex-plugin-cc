@@ -312,6 +312,7 @@ rl.on("line", (line) => {
         if (requiresExperimental("persistExtendedHistory", message, state) || requiresExperimental("persistFullHistory", message, state)) {
           throw new Error("thread/start.persistFullHistory requires experimentalApi capability");
         }
+        state.lastThreadStartApprovalPolicy = message.params.approvalPolicy;
         state.lastThreadStart = { ...message.params };
         const thread = nextThread(state, message.params.cwd, message.params.ephemeral);
         state.lastThreadStart = { ...message.params, threadId: thread.id, model: message.params.model ?? null };

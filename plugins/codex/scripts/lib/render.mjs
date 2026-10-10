@@ -106,6 +106,32 @@ function formatCodexResumeCommand(job) {
   return `codex resume ${job.threadId}`;
 }
 
+function formatResolvedSettings(resolved) {
+  if (!resolved || typeof resolved !== "object") {
+    return null;
+  }
+  const prototype = Object.getPrototypeOf(resolved);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return null;
+  }
+  const sandbox = typeof resolved.sandbox === "string" ? resolved.sandbox : resolved.sandbox?.type;
+  const approvalKeys = resolved.approvalPolicy && typeof resolved.approvalPolicy === "object"
+    ? Object.keys(resolved.approvalPolicy)
+    : [];
+  const approval = typeof resolved.approvalPolicy === "string"
+    ? resolved.approvalPolicy
+    : approvalKeys.length === 1 ? approvalKeys[0] : null;
+  const parts = [
+    ["model", resolved.model],
+    ["effort", resolved.reasoningEffort],
+    ["sandbox", sandbox],
+    ["approval", approval]
+  ]
+    .filter(([, value]) => typeof value === "string" && value.trim())
+    .map(([label, value]) => `${label} ${value.trim()}`);
+  return parts.length > 0 ? `Settings: ${parts.join(", ")}` : null;
+}
+
 function appendActiveJobsTable(lines, jobs) {
   lines.push("Active jobs:");
   lines.push("| Job | Kind | Status | Phase | Elapsed | Codex Session ID | Summary | Actions |");
@@ -141,6 +167,10 @@ function pushJobDetails(lines, job, options = {}) {
   const resumeCommand = formatCodexResumeCommand(job);
   if (resumeCommand) {
     lines.push(`  Resume in Codex: ${resumeCommand}`);
+  }
+  const settings = formatResolvedSettings(job.resolved);
+  if (settings) {
+    lines.push(`  ${settings}`);
   }
   if (job.logFile && options.showLog) {
     lines.push(`  Log: ${job.logFile}`);
@@ -420,12 +450,18 @@ export function storedJobHasOutput(storedJob) {
 export function renderStoredJobResult(job, storedJob, recovered = null) {
   const threadId = storedJob?.threadId ?? job.threadId ?? null;
   const resumeCommand = threadId ? `codex resume ${threadId}` : null;
+  const settings = formatResolvedSettings(storedJob?.resolved ?? job.resolved);
+  const footer = [];
+  if (threadId) {
+    footer.push(`Codex session ID: ${threadId}`, `Resume in Codex: ${resumeCommand}`);
+  }
+  if (settings) {
+    footer.push(settings);
+  }
+  const suffix = footer.length > 0 ? `\n${footer.join("\n")}\n` : "";
   if (isStructuredReviewStoredResult(storedJob) && hasText(storedJob?.rendered)) {
     const output = storedJob.rendered.endsWith("\n") ? storedJob.rendered : `${storedJob.rendered}\n`;
-    if (!threadId) {
-      return output;
-    }
-    return `${output}\nCodex session ID: ${threadId}\nResume in Codex: ${resumeCommand}\n`;
+    return `${output}${suffix}`;
   }
 
   const rawOutput =
@@ -434,18 +470,12 @@ export function renderStoredJobResult(job, storedJob, recovered = null) {
     "";
   if (rawOutput) {
     const output = rawOutput.endsWith("\n") ? rawOutput : `${rawOutput}\n`;
-    if (!threadId) {
-      return output;
-    }
-    return `${output}\nCodex session ID: ${threadId}\nResume in Codex: ${resumeCommand}\n`;
+    return `${output}${suffix}`;
   }
 
   if (hasText(storedJob?.rendered)) {
     const output = storedJob.rendered.endsWith("\n") ? storedJob.rendered : `${storedJob.rendered}\n`;
-    if (!threadId) {
-      return output;
-    }
-    return `${output}\nCodex session ID: ${threadId}\nResume in Codex: ${resumeCommand}\n`;
+    return `${output}${suffix}`;
   }
 
   const lines = [
@@ -458,6 +488,9 @@ export function renderStoredJobResult(job, storedJob, recovered = null) {
   if (threadId) {
     lines.push(`Codex session ID: ${threadId}`);
     lines.push(`Resume in Codex: ${resumeCommand}`);
+  }
+  if (settings) {
+    lines.push(settings);
   }
 
   if (job.summary) {

@@ -19,6 +19,7 @@ const FAKE_RESOLVED_SETTINGS = {
   model: "gpt-5.4",
   modelProvider: "openai",
   reasoningEffort: null,
+  approvalPolicy: "never",
   sandbox: {
     type: "readOnly",
     access: { type: "fullAccess" },
@@ -1206,6 +1207,27 @@ test("task forwards model selection and reasoning effort to app-server turn/star
     model: "gpt-5.3-codex-spark",
     reasoningEffort: "low"
   });
+});
+
+test("status and result display resolved settings for a completed task", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "resolved-effort");
+  initGitRepo(repo);
+  const env = buildEnv(binDir);
+
+  const task = run("node", [SCRIPT, "task", "diagnose the failing test"], { cwd: repo, env });
+  assert.equal(task.status, 0, task.stderr);
+  const job = readPersistedJob(repo);
+  assert.equal(job.status, "completed");
+
+  for (const command of ["status", "result"]) {
+    const output = run("node", [SCRIPT, command, job.id], { cwd: repo, env });
+    assert.equal(output.status, 0, output.stderr);
+    assert.ok(output.stdout.split("\n").some((line) =>
+      line.trim() === "Settings: model gpt-5.4, effort medium, sandbox readOnly, approval never"
+    ), output.stdout);
+  }
 });
 
 test("task preserves resolved settings when turn/start fails", () => {

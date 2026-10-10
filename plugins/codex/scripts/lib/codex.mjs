@@ -1109,7 +1109,8 @@ export async function runAppServerReview(cwd, options = {}) {
       model: response.model,
       modelProvider: response.modelProvider,
       reasoningEffort: response.reasoningEffort,
-      sandbox: response.sandbox
+      sandbox: response.sandbox,
+      approvalPolicy: response.approvalPolicy
     };
     emitProgress(options.onProgress, `Thread ready (${sourceThreadId}).`, "starting", {
       threadId: sourceThreadId,
@@ -1226,7 +1227,8 @@ export async function runAppServerTurn(cwd, options = {}) {
       model: response.model,
       modelProvider: response.modelProvider,
       reasoningEffort: response.reasoningEffort,
-      sandbox: response.sandbox
+      sandbox: response.sandbox,
+      approvalPolicy: response.approvalPolicy
     };
     emitProgress(options.onProgress, `Thread ready (${threadId}).`, "starting", {
       threadId,

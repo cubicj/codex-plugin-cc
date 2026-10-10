@@ -40,7 +40,7 @@ Command selection:
 
 Runtime output:
 - `status` and `result` both accept `--json`.
-- Job records echo the resolved `{ model, modelProvider, reasoningEffort, sandbox }` settings.
+- Job records echo the resolved `{ model, modelProvider, reasoningEffort, sandbox, approvalPolicy }` settings.
 - Job logs emit a `Thinking.` line when a Codex reasoning block starts.
 
 Safety rules:

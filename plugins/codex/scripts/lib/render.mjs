@@ -89,7 +89,18 @@ function formatJobLine(job) {
   if (job.title) {
     parts.push(job.title);
   }
-  return parts.join(" | ");
+  const contract = job.resultContract ? ` [contract ${job.resultContract.valid ? "valid" : "invalid"}]` : "";
+  return `${parts.join(" | ")}${contract}`;
+}
+
+function formatResultContract(contract) {
+  if (!contract) {
+    return null;
+  }
+  if (!contract.valid) {
+    return `Result contract: invalid (${contract.error})`;
+  }
+  return `Result contract: valid${typeof contract.status === "string" ? ` — status ${contract.status}` : ""}`;
 }
 
 function escapeMarkdownCell(value) {
@@ -171,6 +182,10 @@ function pushJobDetails(lines, job, options = {}) {
   const settings = formatResolvedSettings(job.resolved);
   if (settings) {
     lines.push(`  ${settings}`);
+  }
+  const contract = formatResultContract(job.resultContract);
+  if (contract) {
+    lines.push(`  ${contract}`);
   }
   if (job.logFile && options.showLog) {
     lines.push(`  Log: ${job.logFile}`);
@@ -451,12 +466,16 @@ export function renderStoredJobResult(job, storedJob, recovered = null) {
   const threadId = storedJob?.threadId ?? job.threadId ?? null;
   const resumeCommand = threadId ? `codex resume ${threadId}` : null;
   const settings = formatResolvedSettings(storedJob?.resolved ?? job.resolved);
+  const contract = formatResultContract(storedJob?.resultContract ?? job.resultContract);
   const footer = [];
   if (threadId) {
     footer.push(`Codex session ID: ${threadId}`, `Resume in Codex: ${resumeCommand}`);
   }
   if (settings) {
     footer.push(settings);
+  }
+  if (contract) {
+    footer.push(contract);
   }
   const suffix = footer.length > 0 ? `\n${footer.join("\n")}\n` : "";
   if (isStructuredReviewStoredResult(storedJob) && hasText(storedJob?.rendered)) {
@@ -491,6 +510,9 @@ export function renderStoredJobResult(job, storedJob, recovered = null) {
   }
   if (settings) {
     lines.push(settings);
+  }
+  if (contract) {
+    lines.push(contract);
   }
 
   if (job.summary) {

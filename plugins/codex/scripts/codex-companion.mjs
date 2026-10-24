@@ -10,6 +10,7 @@ import { parseCommandInput, parseReviewArgv, parseTaskArgv } from "./lib/args.mj
 import {
     buildPersistentTaskThreadName,
     DEFAULT_CONTINUE_PROMPT,
+    evaluateTaskResultContract,
     findLatestTaskThread,
     getCodexAuthStatus,
     getCodexAvailability,
@@ -90,7 +91,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--read-only] [--resume-last|--resume|--resume-thread <id>|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [prompt]",
+      "  node scripts/codex-companion.mjs task [--background] [--write] [--read-only] [--resume-last|--resume|--resume-thread <id>|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [--output-schema <file>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
@@ -492,6 +493,7 @@ async function executeReviewRun(request) {
 
 async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
+  const outputSchema = request.outputSchemaPath ? readTaskOutputSchema(request.outputSchemaPath) : null;
   ensureCodexAvailable(request.cwd);
 
   const taskMetadata = buildTaskRunMetadata({
@@ -516,6 +518,7 @@ async function executeTaskRun(request) {
 
   const result = await runAppServerTurn(workspaceRoot, {
     resumeThreadId,
+    outputSchema,
     prompt: request.prompt,
     defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
     model: request.model,
@@ -531,6 +534,9 @@ async function executeTaskRun(request) {
   const write = Boolean(request.write) || result.sandbox?.type !== "readOnly";
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
   const failureMessage = result.error?.message ?? result.stderr ?? "";
+  const contractFields = request.outputSchemaPath
+    ? { resultContract: evaluateTaskResultContract(request.outputSchemaPath, outputSchema, result) }
+    : {};
   const rendered = renderTaskResult(
     {
       rawOutput,
@@ -545,6 +551,7 @@ async function executeTaskRun(request) {
   );
   const payload = {
     status: result.status,
+    ...contractFields,
     threadId: result.threadId,
     rawOutput,
     touchedFiles: result.touchedFiles,
@@ -554,6 +561,7 @@ async function executeTaskRun(request) {
 
   return {
     exitStatus: result.status,
+    ...contractFields,
     threadId: result.threadId,
     turnId: result.turnId,
     resolved: result.resolved,
@@ -638,7 +646,7 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, threadTitle, write, readOnly, resumeLast, resumeThreadId, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, threadTitle, write, readOnly, resumeLast, resumeThreadId, outputSchemaPath, jobId }) {
   return {
     cwd,
     model,
@@ -649,6 +657,7 @@ function buildTaskRequest({ cwd, model, effort, prompt, threadTitle, write, read
     readOnly,
     resumeLast,
     resumeThreadId: resumeThreadId ?? null,
+    ...(outputSchemaPath ? { outputSchemaPath } : {}),
     jobId
   };
 }
@@ -689,6 +698,19 @@ function readTaskPrompt(cwd, options, positionals) {
   return positionalPrompt || readStdinIfPiped();
 }
 
+function readTaskOutputSchema(schemaPath) {
+  let schema;
+  try {
+    schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
+  } catch (error) {
+    throw new Error(`--output-schema: cannot read ${schemaPath}: ${error.message}`);
+  }
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    throw new Error(`--output-schema: ${schemaPath} is not a JSON object`);
+  }
+  return schema;
+}
+
 function requireTaskRequest(prompt, resume) {
   if (!prompt && !resume) {
     throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last/--resume-thread.");
@@ -700,7 +722,7 @@ async function runForegroundCommand(job, runner, options = {}) {
     logFile: options.logFile,
     stderr: !options.json
   });
-  const execution = await runTrackedJob(job, () => runner(progress), { logFile });
+  const execution = await runTrackedJob(job, () => runner(progress), { logFile, outputSchemaPath: options.outputSchemaPath });
   outputResult(options.json ? execution.payload : execution.rendered, options.json);
   if (execution.exitStatus !== 0) {
     process.exitCode = execution.exitStatus;
@@ -816,6 +838,10 @@ async function handleTask(argv) {
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
   const resumeThreadId = options["resume-thread"] || null;
+  const outputSchemaPath = options["output-schema"] === undefined ? null : path.resolve(cwd, options["output-schema"]);
+  if (outputSchemaPath) {
+    readTaskOutputSchema(outputSchemaPath);
+  }
   const fresh = Boolean(options.fresh);
   if (resumeLast && fresh) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
@@ -848,6 +874,7 @@ async function handleTask(argv) {
       readOnly,
       resumeLast,
       resumeThreadId,
+      outputSchemaPath,
       jobId: job.id
     });
     const { payload } = enqueueBackgroundTask(cwd, job, request);
@@ -869,10 +896,11 @@ async function handleTask(argv) {
         readOnly,
         resumeLast,
         resumeThreadId,
+        outputSchemaPath,
         jobId: job.id,
         onProgress: progress
       }),
-    { json: options.json }
+    { json: options.json, outputSchemaPath }
   );
 }
 
@@ -930,7 +958,7 @@ async function handleTaskWorker(argv) {
         ...request,
         onProgress: progress
       }),
-    { logFile }
+    { logFile, outputSchemaPath: request.outputSchemaPath }
   );
 }
 

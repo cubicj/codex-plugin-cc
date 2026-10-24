@@ -28,6 +28,7 @@ Command selection:
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
 - If the forwarded request includes `--model`, normalize `spark` to `gpt-5.3-codex-spark` and pass it through to `task`.
 - If the forwarded request includes `--effort`, pass it through to `task`.
+- If the forwarded request includes `--output-schema <file>`, strip both tokens from the task text and pass them through to `task`. The file resolves against the command cwd and must contain a JSON object; it is passed to Codex as the turn's output schema. It works with fresh or resumed tasks, including runtime background tasks.
 - If the forwarded request includes `--thread-title <text>`, strip both tokens from the task text and pass them through to `task` as a runtime control. It sets or renames the thread to `Codex Companion Task: <text>` after trimming, collapsing whitespace, and shortening to 56 characters; a blank title uses the existing naming behavior.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--resume-thread <thread-id>`, strip both tokens from the task text and pass them through to `task`.
@@ -37,10 +38,13 @@ Command selection:
 - `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. Not every model supports every value; Codex validates the value against the reasoning levels the selected model advertises.
 - `task --resume-last`: same-Claude-session convenience for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run. Jobs are filtered to the current Claude session, so it fails when no resumable task is visible there.
 - `task --resume-thread <thread-id>`: durable route for resuming a known Codex thread across Claude sessions.
+- Every resume reads the thread's working directory before resuming or renaming it. The runtime refuses missing or unusable working directories and threads whose canonical workspace root differs from the current workspace; there is no override.
 
 Runtime output:
 - `status` and `result` both accept `--json`.
 - Job records echo the resolved `{ model, modelProvider, reasoningEffort, sandbox, approvalPolicy }` settings.
+- Tasks using `--output-schema` record `resultContract` separately from runtime completion. Local checks parse JSON, allow a whole-message fence, require an object, and check top-level required keys; Codex enforces the remaining schema constraints. Raw output is preserved, and an invalid contract does not change a completed job to failed.
+- `result` and single-job `status` show `Result contract: valid`, optionally followed by ` — status <status>`, or `Result contract: invalid (<error>)`. Status listings append `[contract valid]` or `[contract invalid]`; JSON output preserves the contract object.
 - Job logs emit a `Thinking.` line when a Codex reasoning block starts.
 
 Safety rules:

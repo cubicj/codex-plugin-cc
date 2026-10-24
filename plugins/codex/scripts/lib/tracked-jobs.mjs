@@ -163,9 +163,11 @@ export async function runTrackedJob(job, runner, options = {}) {
   try {
     const execution = await runner();
     const completionStatus = execution.exitStatus === 0 ? "completed" : "failed";
+    const contractFields = execution.resultContract ? { resultContract: execution.resultContract } : {};
     const completedAt = nowIso();
     writeJobFile(job.workspaceRoot, job.id, {
       ...runningRecord,
+      ...contractFields,
       status: completionStatus,
       threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null,
@@ -179,6 +181,7 @@ export async function runTrackedJob(job, runner, options = {}) {
     });
     upsertJob(job.workspaceRoot, {
       id: job.id,
+      ...contractFields,
       status: completionStatus,
       threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null,
@@ -195,8 +198,13 @@ export async function runTrackedJob(job, runner, options = {}) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const existing = readStoredJobOrNull(job.workspaceRoot, job.id) ?? runningRecord;
     const completedAt = nowIso();
+    const contractFields = options.outputSchemaPath
+      ? { resultContract: { schemaPath: options.outputSchemaPath, valid: false, error: "turn did not complete" } }
+      : {};
     writeJobFile(job.workspaceRoot, job.id, {
       ...existing,
+      ...contractFields,
+      ...(options.outputSchemaPath ? { result: { rawOutput: "", ...contractFields } } : {}),
       status: "failed",
       phase: "failed",
       errorMessage,
@@ -206,6 +214,7 @@ export async function runTrackedJob(job, runner, options = {}) {
     });
     upsertJob(job.workspaceRoot, {
       id: job.id,
+      ...contractFields,
       status: "failed",
       phase: "failed",
       pid: null,

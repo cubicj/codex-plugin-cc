@@ -15,6 +15,8 @@ import type {
   ThreadItem,
   ThreadListParams,
   ThreadListResponse,
+  ThreadReadParams,
+  ThreadReadResponse,
   ThreadResumeParams as RawThreadResumeParams,
   ThreadResumeResponse,
   ThreadSetNameParams,
@@ -60,6 +62,7 @@ export interface AppServerMethodMap {
   initialize: { params: InitializeParams; result: InitializeResponse };
   "externalAgentConfig/import": { params: ExternalAgentConfigImportParams; result: ExternalAgentConfigImportResponse };
   "thread/start": { params: ThreadStartParams; result: ThreadStartResponse };
+  "thread/read": { params: ThreadReadParams; result: ThreadReadResponse };
   "thread/resume": { params: ThreadResumeParams; result: ThreadResumeResponse };
   "thread/name/set": { params: ThreadSetNameParams; result: ThreadSetNameResponse };
   "thread/list": { params: ThreadListParams; result: ThreadListResponse };

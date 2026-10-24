@@ -4,7 +4,7 @@ import process from "node:process";
 
 import { writeExecutable } from "./helpers.mjs";
 
-export function installFakeCodex(binDir, behavior = "review-ok") {
+export function installFakeCodex(binDir, behavior = "review-ok", options = {}) {
   const statePath = path.join(binDir, "fake-codex-state.json");
   const scriptPath = path.join(binDir, "codex");
   const source = `#!/usr/bin/env node
@@ -15,6 +15,7 @@ const readline = require("node:readline");
 
 	const STATE_PATH = ${JSON.stringify(statePath)};
 	const BEHAVIOR = ${JSON.stringify(behavior)};
+	const FINAL_MESSAGE = ${JSON.stringify(options.finalMessage ?? null)};
 	const interruptibleTurns = new Map();
 
 	function loadState() {
@@ -282,6 +283,9 @@ rl.on("line", (line) => {
 
   const message = JSON.parse(line);
   const state = loadState();
+  state.requests ??= [];
+  state.requests.push({ method: message.method, params: message.params });
+  saveState(state);
 
   try {
     switch (message.method) {
@@ -345,6 +349,12 @@ rl.on("line", (line) => {
         }
         threads.sort((left, right) => right.updatedAt - left.updatedAt);
         send({ id: message.id, result: { data: threads.map(buildThread), nextCursor: null } });
+        break;
+      }
+
+      case "thread/read": {
+        const thread = ensureThread(state, message.params.threadId);
+        send({ id: message.id, result: { thread: buildThread(thread) } });
         break;
       }
 
@@ -482,6 +492,7 @@ rl.on("line", (line) => {
 	          turnId,
 	          model: message.params.model ?? null,
 	          effort: message.params.effort ?? null,
+	          outputSchema: message.params.outputSchema ?? null,
 	          prompt
 	        };
 	        saveState(state);
@@ -567,9 +578,9 @@ rl.on("line", (line) => {
           send({ method: "turn/completed", params: { threadId: subThread.id, turn: buildTurn(subTurnId, "failed", terminalError) } });
         }
 
-        const payload = message.params.outputSchema && message.params.outputSchema.properties && message.params.outputSchema.properties.verdict
+        const payload = FINAL_MESSAGE ?? (message.params.outputSchema && message.params.outputSchema.properties && message.params.outputSchema.properties.verdict
           ? structuredReviewPayload(prompt)
-          : taskPayload(prompt, thread.name && thread.name.startsWith("Codex Companion Task") && prompt.includes("Continue from the current thread state"));
+          : taskPayload(prompt, thread.name && thread.name.startsWith("Codex Companion Task") && prompt.includes("Continue from the current thread state")));
 
         if (
           BEHAVIOR === "with-subagent" ||

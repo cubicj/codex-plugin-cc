@@ -43,6 +43,7 @@ import { readJsonFile } from "./fs.mjs";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mjs";
 import { loadBrokerSession } from "./broker-lifecycle.mjs";
 import { binaryAvailable } from "./process.mjs";
+import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const SERVICE_NAME = "claude_code_codex_plugin";
 const TASK_THREAD_PREFIX = "Codex Companion Task";
@@ -839,6 +840,21 @@ async function startThread(client, cwd, options = {}) {
 }
 
 async function resumeThread(client, threadId, cwd, options = {}) {
+  const currentRoot = fs.realpathSync(resolveWorkspaceRoot(cwd));
+  const response = await client.request("thread/read", { threadId, includeTurns: false });
+  const threadCwd = response.thread?.cwd;
+  let threadRoot;
+  try {
+    if (typeof threadCwd !== "string" || !threadCwd || !fs.statSync(threadCwd).isDirectory()) {
+      throw new Error("Unusable working directory");
+    }
+    threadRoot = fs.realpathSync(resolveWorkspaceRoot(threadCwd));
+  } catch {
+    throw new Error(`Codex thread ${threadId} has no usable working directory (${threadCwd || "none"}); refusing to resume it from ${currentRoot}.`);
+  }
+  if (threadRoot !== currentRoot) {
+    throw new Error(`Codex thread ${threadId} belongs to ${threadRoot}, not ${currentRoot}; refusing to resume it.`);
+  }
   return client.request("thread/resume", buildResumeParams(threadId, cwd, options));
 }
 
@@ -1318,6 +1334,33 @@ function unfenceStructuredOutput(rawOutput) {
   const trimmed = String(rawOutput).trim();
   const fenced = FENCED_MESSAGE.exec(trimmed);
   return fenced ? fenced[1] : trimmed;
+}
+
+export function evaluateTaskResultContract(schemaPath, schema, result) {
+  const contract = { schemaPath, valid: false };
+  if (result.status !== 0) {
+    return { ...contract, error: "turn did not complete" };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(unfenceStructuredOutput(result.finalMessage ?? ""));
+  } catch (error) {
+    return { ...contract, error: `not JSON: ${error.message}` };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ...contract, error: "not a JSON object" };
+  }
+  const missing = Array.isArray(schema.required)
+    ? schema.required.filter((key) => !Object.prototype.hasOwnProperty.call(parsed, key))
+    : [];
+  if (missing.length > 0) {
+    return { ...contract, error: `missing required: ${missing.join(", ")}` };
+  }
+  return {
+    schemaPath,
+    valid: true,
+    ...(typeof parsed.status === "string" ? { status: parsed.status } : {})
+  };
 }
 
 export function parseStructuredOutput(rawOutput, fallback = {}) {

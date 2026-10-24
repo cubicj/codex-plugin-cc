@@ -7,6 +7,10 @@ import { spawnSync } from "node:child_process";
 import { loadBrokerSession, teardownBrokerSession } from "../plugins/codex/scripts/lib/broker-lifecycle.mjs";
 import { terminateProcessTree } from "../plugins/codex/scripts/lib/process.mjs";
 
+for (const name of ["CODEX_COMPANION_SESSION_ID", "CODEX_COMPANION_TRANSCRIPT_PATH", "CODEX_COMPANION_PLUGIN_DATA"]) {
+  delete process.env[name];
+}
+
 // `ensureBrokerSession` keys the app-server broker by cwd and spawns it detached, and
 // every test here gets a fresh cwd -- so a suite run strands one broker tree per test
 // that reached the app server. A broker exits only on a shutdown RPC or a signal, and

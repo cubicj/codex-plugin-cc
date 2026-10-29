@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 import { loadBrokerSession, saveBrokerSession } from "../plugins/codex/scripts/lib/broker-lifecycle.mjs";
+import { createBrokerEndpoint, parseBrokerEndpoint } from "../plugins/codex/scripts/lib/broker-endpoint.mjs";
 import { resolveStateDir } from "../plugins/codex/scripts/lib/state.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -2598,126 +2599,239 @@ test("cancel sends turn interrupt to the shared app-server before killing a brok
   assert.equal(cleanup.status, 0, cleanup.stderr);
 });
 
-test("session end fully cleans up jobs for the ending session", async (t) => {
-  const repo = makeTempDir();
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
-  run("git", ["add", "README.md"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-
+function seedSessionEndJobs(repo, jobs) {
   const stateDir = resolveStateDir(repo);
-  const jobsDir = path.join(stateDir, "jobs");
-  fs.mkdirSync(jobsDir, { recursive: true });
+  fs.mkdirSync(path.join(stateDir, "jobs"), { recursive: true });
+  const records = jobs.map((job) => ({
+    updatedAt: "2026-03-18T15:33:00.000Z",
+    logFile: path.join(stateDir, "jobs", `${job.id}.log`),
+    ...job
+  }));
+  for (const job of records) {
+    fs.writeFileSync(job.logFile, `Existing log for ${job.id}\n`);
+    fs.writeFileSync(path.join(stateDir, "jobs", `${job.id}.json`), JSON.stringify({
+      ...job,
+      rendered: "Preserved output"
+    }));
+  }
+  fs.writeFileSync(path.join(stateDir, "state.json"), JSON.stringify({
+    version: 1,
+    config: { stopReviewGate: true },
+    jobs: records
+  }));
+  return records;
+}
 
-  const completedLog = path.join(jobsDir, "completed.log");
-  const runningLog = path.join(jobsDir, "running.log");
-  const otherSessionLog = path.join(jobsDir, "other.log");
-  const completedJobFile = path.join(jobsDir, "review-completed.json");
-  const runningJobFile = path.join(jobsDir, "review-running.json");
-  const otherJobFile = path.join(jobsDir, "review-other.json");
-  fs.writeFileSync(completedLog, "completed\n", "utf8");
-  fs.writeFileSync(runningLog, "running\n", "utf8");
-  fs.writeFileSync(otherSessionLog, "other\n", "utf8");
-  fs.writeFileSync(completedJobFile, JSON.stringify({ id: "review-completed" }, null, 2), "utf8");
-  fs.writeFileSync(otherJobFile, JSON.stringify({ id: "review-other" }, null, 2), "utf8");
-
-  const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    cwd: repo,
+async function startSessionEndBroker(t, repo, { persist = true } = {}) {
+  const sessionDir = makeTempDir();
+  const endpoint = createBrokerEndpoint(sessionDir);
+  const pidFile = path.join(sessionDir, "broker.pid");
+  const logFile = path.join(sessionDir, "broker.log");
+  const requestsFile = path.join(repo, "broker-requests.json");
+  const stateFile = path.join(resolveStateDir(repo), "state.json");
+  fs.writeFileSync(logFile, "Broker log\n");
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `
+    import fs from "node:fs";
+    import net from "node:net";
+    const [socketPath, pidFile, requestsFile, stateFile] = process.argv.slice(1);
+    net.createServer((socket) => {
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk;
+        if (!buffer.includes("\\n")) return;
+        fs.writeFileSync(requestsFile, JSON.stringify({
+          request: JSON.parse(buffer.trim()),
+          state: JSON.parse(fs.readFileSync(stateFile, "utf8"))
+        }));
+        socket.end('{"id":1,"result":{}}\\n');
+      });
+    }).listen(socketPath, () => fs.writeFileSync(pidFile, String(process.pid)));
+  `, parseBrokerEndpoint(endpoint).path, pidFile, requestsFile, stateFile], {
     detached: true,
     stdio: "ignore"
   });
-  sleeper.unref();
-  fs.writeFileSync(runningJobFile, JSON.stringify({ id: "review-running" }, null, 2), "utf8");
+  t.after(() => child.kill());
+  await waitFor(() => fs.existsSync(pidFile));
+  const session = { endpoint, pidFile, logFile, sessionDir, pid: child.pid };
+  if (persist) saveBrokerSession(repo, session);
+  return { ...session, child, requestsFile };
+}
 
-  t.after(() => {
-    try {
-      process.kill(-sleeper.pid, "SIGTERM");
-    } catch {
-      try {
-        process.kill(sleeper.pid, "SIGTERM");
-      } catch {
-        // Ignore missing process.
-      }
-    }
+for (const scenario of [
+  { name: "another session's running job", status: "running", sessionId: "sess-other", endingId: "sess-current" },
+  { name: "another session's queued job", status: "queued", sessionId: "sess-other", endingId: "sess-current" },
+  { name: "an unowned running job", status: "running", endingId: "sess-current" },
+  { name: "a running job when the ending session is unknown", status: "running", sessionId: "sess-other" }
+]) {
+  test(`session end preserves the broker for ${scenario.name}`, async (t) => {
+    const repo = makeTempDir();
+    initGitRepo(repo);
+    const [other] = seedSessionEndJobs(repo, [{ id: "other", status: scenario.status, sessionId: scenario.sessionId }]);
+    const jobFile = path.join(resolveStateDir(repo), "jobs", "other.json");
+    const originalFile = fs.readFileSync(jobFile, "utf8");
+    const broker = await startSessionEndBroker(t, repo);
+    const brokerFile = path.join(resolveStateDir(repo), "broker.json");
+    const originalBroker = fs.readFileSync(brokerFile, "utf8");
+
+    const result = run("node", [SESSION_HOOK, "SessionEnd"], {
+      cwd: repo,
+      env: { ...process.env, CODEX_COMPANION_SESSION_ID: "" },
+      input: JSON.stringify({ cwd: repo, session_id: scenario.endingId })
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(broker.requestsFile), false, "No shutdown request should be sent");
+    assert.equal(fs.readFileSync(brokerFile, "utf8"), originalBroker);
+    assert.doesNotThrow(() => process.kill(broker.pid, 0));
+    assert.equal(fs.readFileSync(broker.logFile, "utf8"), "Broker log\n");
+    assert.equal(fs.readFileSync(broker.pidFile, "utf8"), String(broker.pid));
+    assert.equal(fs.readFileSync(jobFile, "utf8"), originalFile);
+    assert.equal(fs.readFileSync(other.logFile, "utf8"), "Existing log for other\n");
+    const state = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
+    assert.deepEqual(state.jobs, [JSON.parse(JSON.stringify(other))]);
   });
+}
 
-  fs.writeFileSync(
-    path.join(stateDir, "state.json"),
-    `${JSON.stringify(
-      {
-        version: 1,
-        config: { stopReviewGate: false },
-        jobs: [
-          {
-            id: "review-completed",
-            status: "completed",
-            title: "Codex Review",
-            sessionId: "sess-current",
-            logFile: completedLog,
-            createdAt: "2026-03-18T15:30:00.000Z",
-            updatedAt: "2026-03-18T15:31:00.000Z"
-          },
-          {
-            id: "review-running",
-            status: "running",
-            title: "Codex Review",
-            sessionId: "sess-current",
-            pid: sleeper.pid,
-            logFile: runningLog,
-            createdAt: "2026-03-18T15:32:00.000Z",
-            updatedAt: "2026-03-18T15:33:00.000Z"
-          },
-          {
-            id: "review-other",
-            status: "completed",
-            title: "Codex Review",
-            sessionId: "sess-other",
-            logFile: otherSessionLog,
-            createdAt: "2026-03-18T15:34:00.000Z",
-            updatedAt: "2026-03-18T15:35:00.000Z"
-          }
-        ]
+for (const persist of [true, false]) {
+  test(`session end shuts down the idle broker after cancellation using ${persist ? "stored session" : "environment fallback"}`, async (t) => {
+    const repo = makeTempDir();
+    initGitRepo(repo);
+    seedSessionEndJobs(repo, [
+      { id: "own", status: "queued", sessionId: "sess-current" },
+      { id: "other", status: "completed", sessionId: "sess-other" }
+    ]);
+    const broker = await startSessionEndBroker(t, repo, { persist });
+    const result = run("node", [SESSION_HOOK, "SessionEnd"], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        CODEX_COMPANION_SESSION_ID: "sess-current",
+        CODEX_COMPANION_APP_SERVER_ENDPOINT: broker.endpoint,
+        CODEX_COMPANION_APP_SERVER_PID_FILE: broker.pidFile,
+        CODEX_COMPANION_APP_SERVER_LOG_FILE: broker.logFile
       },
-      null,
-      2
-    )}\n`,
-    "utf8"
-  );
+      input: JSON.stringify({ cwd: repo })
+    });
 
+    assert.equal(result.status, 0, result.stderr);
+    const observed = JSON.parse(fs.readFileSync(broker.requestsFile, "utf8"));
+    assert.equal(observed.request.method, "broker/shutdown");
+    assert.equal(observed.state.jobs.find((job) => job.id === "own")?.status, "cancelled");
+    assert.equal(fs.existsSync(path.join(resolveStateDir(repo), "broker.json")), false);
+    assert.equal(fs.existsSync(broker.pidFile), false);
+    assert.equal(fs.existsSync(broker.logFile), false);
+    assert.equal(fs.existsSync(broker.sessionDir), false);
+    if (persist) await waitFor(() => broker.child.exitCode !== null || broker.child.signalCode !== null);
+  });
+}
+
+for (const status of ["running", "queued"]) {
+  test(`session end cancels and retains its ${status} job`, async (t) => {
+    const repo = makeTempDir();
+    initGitRepo(repo);
+    const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore"
+    });
+    t.after(() => sleeper.kill());
+    const [own, other] = seedSessionEndJobs(repo, [
+      { id: "own", status, sessionId: "sess-current", pid: sleeper.pid },
+      { id: "other", status: "running", sessionId: "sess-other" }
+    ]);
+    const jobFile = path.join(resolveStateDir(repo), "jobs", "own.json");
+    if (status === "queued") fs.unlinkSync(jobFile);
+    const result = run("node", [SESSION_HOOK, "SessionEnd"], {
+      cwd: repo,
+      env: { ...process.env, CODEX_COMPANION_SESSION_ID: "sess-other" },
+      input: JSON.stringify({ cwd: repo, session_id: "sess-current" })
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    await waitFor(() => sleeper.exitCode !== null || sleeper.signalCode !== null);
+    const state = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
+    assert.equal(state.jobs.length, 2);
+    assert.deepEqual(state.jobs.find((job) => job.id === "other"), other);
+    assert.equal(state.config.stopReviewGate, true);
+    const cancelled = state.jobs.find((job) => job.id === "own");
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.phase, "cancelled");
+    assert.equal(cancelled.pid, null);
+    assert.ok(Number.isFinite(Date.parse(cancelled.completedAt)));
+    assert.match(cancelled.errorMessage, /session ended/i);
+    const stored = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+    for (const field of ["status", "phase", "pid", "completedAt", "errorMessage"]) {
+      assert.equal(stored[field], cancelled[field]);
+    }
+    assert.equal(stored.cancelledAt, cancelled.completedAt);
+    if (status === "running") assert.equal(stored.rendered, "Preserved output");
+    const log = fs.readFileSync(own.logFile, "utf8");
+    assert.ok(log.startsWith("Existing log for own\n"));
+    assert.ok(log.includes(cancelled.errorMessage));
+  });
+}
+
+test("session end retains terminal jobs and their files unchanged", () => {
+  const repo = makeTempDir();
+  initGitRepo(repo);
+  const jobs = seedSessionEndJobs(repo, ["completed", "failed", "cancelled"].map((status) => ({
+    id: status,
+    status,
+    sessionId: "sess-current"
+  })));
+  const snapshots = jobs.map((job) => ({
+    job,
+    file: fs.readFileSync(path.join(resolveStateDir(repo), "jobs", `${job.id}.json`), "utf8"),
+    log: fs.readFileSync(job.logFile, "utf8")
+  }));
   const result = run("node", [SESSION_HOOK, "SessionEnd"], {
     cwd: repo,
-    env: {
-      ...process.env,
-      CODEX_COMPANION_SESSION_ID: "sess-current"
-    },
-    input: JSON.stringify({
-      hook_event_name: "SessionEnd",
-      session_id: "sess-current",
-      cwd: repo
-    })
+    env: process.env,
+    input: JSON.stringify({ cwd: repo, session_id: "sess-current" })
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(fs.existsSync(otherSessionLog), true);
-  assert.equal(fs.existsSync(otherJobFile), true);
-  assert.deepEqual(
-    fs.readdirSync(path.dirname(otherJobFile)).sort(),
-    [path.basename(otherJobFile), path.basename(otherSessionLog)].sort()
-  );
+  const state = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
+  assert.equal(state.jobs.length, jobs.length);
+  for (const snapshot of snapshots) {
+    assert.deepEqual(state.jobs.find((job) => job.id === snapshot.job.id), snapshot.job);
+    assert.equal(fs.readFileSync(path.join(resolveStateDir(repo), "jobs", `${snapshot.job.id}.json`), "utf8"), snapshot.file);
+    assert.equal(fs.readFileSync(snapshot.job.logFile, "utf8"), snapshot.log);
+  }
+});
 
-  await waitFor(() => {
-    try {
-      process.kill(sleeper.pid, 0);
-      return false;
-    } catch (error) {
-      return error?.code === "ESRCH";
-    }
+test("session end re-reads active work published after its cancellation state write", async (t) => {
+  const repo = makeTempDir();
+  initGitRepo(repo);
+  seedSessionEndJobs(repo, [{ id: "own", status: "running", sessionId: "sess-current" }]);
+  const broker = await startSessionEndBroker(t, repo);
+  const stateFile = path.join(resolveStateDir(repo), "state.json");
+  const preload = path.join(repo, "publish-after-cancellation.cjs");
+  fs.writeFileSync(preload, `
+    const fs = require("node:fs");
+    const renameSync = fs.renameSync;
+    fs.renameSync = function (source, target) {
+      const result = renameSync.apply(this, arguments);
+      if (target === ${JSON.stringify(stateFile)}) {
+        const state = JSON.parse(fs.readFileSync(target, "utf8"));
+        state.jobs.push({ id: "late", status: "queued", sessionId: "sess-other" });
+        fs.writeFileSync(target, JSON.stringify(state));
+      }
+      return result;
+    };
+  `);
+  const result = run("node", ["--require", preload, SESSION_HOOK, "SessionEnd"], {
+    cwd: repo,
+    env: process.env,
+    input: JSON.stringify({ cwd: repo, session_id: "sess-current" })
   });
 
-  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
-  assert.deepEqual(state.jobs.map((job) => job.id), ["review-other"]);
-  const otherJob = state.jobs[0];
-  assert.equal(otherJob.logFile, otherSessionLog);
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  assert.equal(state.jobs.find((job) => job.id === "late")?.status, "queued");
+  assert.equal(fs.existsSync(broker.requestsFile), false);
+  assert.ok(loadBrokerSession(repo));
+  assert.doesNotThrow(() => process.kill(broker.pid, 0));
+  assert.equal(state.jobs.find((job) => job.id === "own")?.status, "cancelled");
 });
 
 test("stop hook runs a stop-time review task and blocks on findings when the review gate is enabled", () => {

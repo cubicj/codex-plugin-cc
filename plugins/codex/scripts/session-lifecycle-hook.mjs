@@ -14,7 +14,16 @@ import {
   sendBrokerShutdown,
   teardownBrokerSession
 } from "./lib/broker-lifecycle.mjs";
-import { loadState, PLUGIN_DATA_ENV, resolveStateFile, saveState } from "./lib/state.mjs";
+import {
+  loadState,
+  PLUGIN_DATA_ENV,
+  readJobFile,
+  resolveJobFile,
+  resolveStateFile,
+  updateState,
+  writeJobFile
+} from "./lib/state.mjs";
+import { appendLogLine } from "./lib/tracked-jobs.mjs";
 import { TRANSCRIPT_PATH_ENV } from "./lib/claude-session-transfer.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
@@ -72,32 +81,37 @@ function cleanupSessionJobs(cwd, sessionId) {
     return;
   }
 
-  const state = loadState(workspaceRoot);
-  const removedJobs = state.jobs.filter((job) => job.sessionId === sessionId);
-  if (removedJobs.length === 0) {
-    return;
-  }
+  updateState(workspaceRoot, (state) => {
+    for (const job of state.jobs) {
+      if (job.sessionId !== sessionId || (job.status !== "queued" && job.status !== "running")) {
+        continue;
+      }
+      try {
+        terminateProcessTree(job.pid ?? Number.NaN);
+      } catch {
+        // Ignore teardown failures during session shutdown.
+      }
 
-  for (const job of removedJobs) {
-    const stillRunning = job.status === "queued" || job.status === "running";
-    if (!stillRunning) {
-      continue;
+      const completedAt = new Date().toISOString();
+      const errorMessage = "Cancelled because the Claude session ended.";
+      Object.assign(job, {
+        status: "cancelled",
+        phase: "cancelled",
+        pid: null,
+        completedAt,
+        errorMessage,
+        updatedAt: completedAt
+      });
+      const jobFile = resolveJobFile(workspaceRoot, job.id);
+      const existing = fs.existsSync(jobFile) ? readJobFile(jobFile) : {};
+      writeJobFile(workspaceRoot, job.id, {
+        ...existing,
+        ...job,
+        cancelledAt: completedAt
+      });
+      appendLogLine(job.logFile, errorMessage);
     }
-    try {
-      terminateProcessTree(job.pid ?? Number.NaN);
-    } catch {
-      // Ignore teardown failures during session shutdown.
-    }
-  }
-
-  saveState(
-    workspaceRoot,
-    {
-      ...state,
-      jobs: state.jobs.filter((job) => job.sessionId !== sessionId)
-    },
-    { removedJobIds: removedJobs.map((job) => job.id) }
-  );
+  });
 }
 
 function handleSessionStart(input) {
@@ -108,6 +122,15 @@ function handleSessionStart(input) {
 
 async function handleSessionEnd(input) {
   const cwd = input.cwd || process.cwd();
+  const sessionId = input.session_id || process.env[SESSION_ID_ENV];
+  cleanupSessionJobs(cwd, sessionId);
+
+  const state = loadState(resolveWorkspaceRoot(cwd));
+  const hasActiveJobs = state.jobs.some((job) => job.status === "queued" || job.status === "running");
+  if (hasActiveJobs) {
+    return;
+  }
+
   const brokerSession =
     loadBrokerSession(cwd) ??
     (process.env[BROKER_ENDPOINT_ENV]
@@ -128,7 +151,6 @@ async function handleSessionEnd(input) {
 
   const pid = recordedBrokerPid(brokerSession);
 
-  cleanupSessionJobs(cwd, input.session_id || process.env[SESSION_ID_ENV]);
   teardownBrokerSession({
     endpoint: brokerEndpoint,
     pidFile,

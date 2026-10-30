@@ -14,16 +14,7 @@ import {
   sendBrokerShutdown,
   teardownBrokerSession
 } from "./lib/broker-lifecycle.mjs";
-import {
-  loadState,
-  PLUGIN_DATA_ENV,
-  readJobFile,
-  resolveJobFile,
-  resolveStateFile,
-  updateState,
-  writeJobFile
-} from "./lib/state.mjs";
-import { appendLogLine } from "./lib/tracked-jobs.mjs";
+import { loadState, PLUGIN_DATA_ENV } from "./lib/state.mjs";
 import { TRANSCRIPT_PATH_ENV } from "./lib/claude-session-transfer.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
@@ -70,50 +61,6 @@ function appendEnvVar(name, value) {
   fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `${line}\n`, "utf8");
 }
 
-function cleanupSessionJobs(cwd, sessionId) {
-  if (!cwd || !sessionId) {
-    return;
-  }
-
-  const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const stateFile = resolveStateFile(workspaceRoot);
-  if (!fs.existsSync(stateFile)) {
-    return;
-  }
-
-  updateState(workspaceRoot, (state) => {
-    for (const job of state.jobs) {
-      if (job.sessionId !== sessionId || (job.status !== "queued" && job.status !== "running")) {
-        continue;
-      }
-      try {
-        terminateProcessTree(job.pid ?? Number.NaN);
-      } catch {
-        // Ignore teardown failures during session shutdown.
-      }
-
-      const completedAt = new Date().toISOString();
-      const errorMessage = "Cancelled because the Claude session ended.";
-      Object.assign(job, {
-        status: "cancelled",
-        phase: "cancelled",
-        pid: null,
-        completedAt,
-        errorMessage,
-        updatedAt: completedAt
-      });
-      const jobFile = resolveJobFile(workspaceRoot, job.id);
-      const existing = fs.existsSync(jobFile) ? readJobFile(jobFile) : {};
-      writeJobFile(workspaceRoot, job.id, {
-        ...existing,
-        ...job,
-        cancelledAt: completedAt
-      });
-      appendLogLine(job.logFile, errorMessage);
-    }
-  });
-}
-
 function handleSessionStart(input) {
   appendEnvVar(SESSION_ID_ENV, input.session_id);
   appendEnvVar(TRANSCRIPT_PATH_ENV, input.transcript_path);
@@ -122,9 +69,6 @@ function handleSessionStart(input) {
 
 async function handleSessionEnd(input) {
   const cwd = input.cwd || process.cwd();
-  const sessionId = input.session_id || process.env[SESSION_ID_ENV];
-  cleanupSessionJobs(cwd, sessionId);
-
   const state = loadState(resolveWorkspaceRoot(cwd));
   const hasActiveJobs = state.jobs.some((job) => job.status === "queued" || job.status === "running");
   if (hasActiveJobs) {

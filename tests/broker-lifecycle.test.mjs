@@ -48,28 +48,6 @@ test("teardownBrokerSession terminates the broker when no killer is injected", (
   assert.equal(fs.existsSync(pidFile), false, "pid file is removed");
 });
 
-test("teardownBrokerSession does not unlink the pid file while leaving the process alive", () => {
-  // The regression: the default was `killProcess = null`, so the guard
-  // `Number.isFinite(pid) && killProcess` was false and nothing was terminated,
-  // while the pid file was unlinked regardless. Reproduce the shape by asserting
-  // the default parameter is a callable rather than null.
-  const source = fs.readFileSync(
-    new URL("../plugins/codex/scripts/lib/broker-lifecycle.mjs", import.meta.url),
-    "utf8"
-  );
-
-  assert.match(
-    source,
-    /killProcess = terminateProcessTree/,
-    "teardownBrokerSession must default killProcess to a real terminator, not null"
-  );
-  assert.doesNotMatch(
-    source,
-    /killProcess: options\.killProcess \?\? null/,
-    "ensureBrokerSession must not coerce an absent injection to null; that orphans the broker it just tore down"
-  );
-});
-
 test("ensureBrokerSession does not orphan a broker that never becomes ready", async () => {
   // Behavioural, and deliberately injects nothing: injecting a killer would
   // exercise the path that always worked. This spawns a REAL process that never

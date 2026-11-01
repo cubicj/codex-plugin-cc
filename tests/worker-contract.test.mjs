@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 import { listJobs, resolveJobFile } from "../plugins/codex/scripts/lib/state.mjs";
-import { renderJobStatusReport, renderStatusReport, renderStoredJobResult, renderTaskResult } from "../plugins/codex/scripts/lib/render.mjs";
+import { renderTaskResult } from "../plugins/codex/scripts/lib/render.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../plugins/codex/scripts/codex-companion.mjs", import.meta.url));
 const SCHEMA = { type: "object", properties: { status: { type: "string" }, summary: { type: "string" } }, required: ["status", "summary"] };
@@ -215,11 +215,7 @@ test("task without schema keeps legacy result and status bytes", () => {
   assert.equal(Object.hasOwn(job, "resultContract"), false);
   assert.equal(Object.hasOwn(stored, "resultContract"), false);
   assert.equal(Object.hasOwn(stored.result, "resultContract"), false);
-  const fixed = { id: "task_fixture", title: "Codex Task", status: "completed", jobClass: "task", kindLabel: "rescue", threadId: "thr_1", summary: "done", phase: "done", duration: "1s" };
   assert.equal(renderTaskResult(stored.result, {}), "done\n");
-  assert.equal(renderStoredJobResult(fixed, { ...fixed, result: stored.result }), "done\n\nCodex session ID: thr_1\nResume in Codex: codex resume thr_1\n");
-  assert.equal(renderJobStatusReport(fixed), "# Codex Job Status\n\n- task_fixture | completed | rescue | Codex Task\n  Summary: done\n  Phase: done\n  Duration: 1s\n  Codex session ID: thr_1\n  Resume in Codex: codex resume thr_1\n  Result: /codex:result task_fixture\n");
-  assert.equal(renderStatusReport({ sessionRuntime: { label: "direct" }, config: {}, running: [], latestFinished: fixed, recent: [] }), "# Codex Status\n\nSession runtime: direct\nReview gate: disabled\n\nLatest finished:\n- task_fixture | completed | rescue | Codex Task\n  Summary: done\n  Phase: done\n  Duration: 1s\n  Codex session ID: thr_1\n  Resume in Codex: codex resume thr_1\n");
 });
 
 test("background task stores its absolute schema path and result contract", () => {

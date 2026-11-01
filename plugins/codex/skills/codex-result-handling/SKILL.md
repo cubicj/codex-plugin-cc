@@ -6,17 +6,14 @@ user-invocable: false
 
 # Codex Result Handling
 
-When the helper returns Codex output:
-- Preserve the helper's verdict, summary, findings, and next steps structure.
-- For review output, present findings first and keep them ordered by severity.
-- Use the file paths and line numbers exactly as the helper reports them.
-- Preserve evidence boundaries. If Codex marked something as an inference, uncertainty, or follow-up question, keep that distinction.
-- Preserve output sections when the prompt asked for them, such as observed facts, inferences, open questions, touched files, or next steps.
-- If there are no findings, say that explicitly and keep the residual-risk note brief.
-- If Codex made edits, say so explicitly and list the touched files when the helper provides them.
-- For `codex:codex-rescue`, do not turn a failed or incomplete Codex run into a Claude-side implementation attempt. Report the failure and stop.
-- For `codex:codex-rescue`, if Codex was never successfully invoked, do not generate a substitute answer at all.
-- After presenting review findings, report them and stop. Never auto-fix any issue, never append a question menu, and wait for the user's next instruction.
-- When `result` recovers output from a Codex rollout transcript, preserve the helper's recovered-output label exactly, including `PARTIAL` when present, along with the transcript source and any warning that the turn may not have finished.
-- If the helper reports malformed output or a failed Codex run, include the most actionable stderr lines and stop there instead of guessing.
-- If the helper reports that setup or authentication is required, direct the user to `/codex:setup` and do not improvise alternate auth flows.
+Present findings by severity, preserving exact paths, line numbers, evidence, uncertainty, and requested output sections. State when there are no findings, which files changed, and what remains unverified. User-facing framing follows the user's language rule; preserve requested raw payloads and exact evidence verbatim.
+
+When output is recovered from a rollout transcript, preserve the recovered-output label, `PARTIAL` marker, transcript source, and warning that the turn may not have finished.
+
+Treat runtime completion, output-contract validity, and the worker's task status as separate signals. With `--output-schema`, local checks parse JSON (including a whole-message fence), require an object, and check top-level required keys; Codex enforces the remaining schema constraints. Raw output is preserved. An invalid contract does not change a completed job to failed, and a valid contract with task status `BLOCKED` does not mean success.
+
+`result` and single-job `status` display contract validity and any task status or contract error; listings append `[contract valid]` or `[contract invalid]`. Both commands accept `--json`, which preserves `resultContract` and the resolved model, provider, reasoning effort, sandbox, and approval settings.
+
+Apply the current CLAUDE.md Codex Orchestration continuation rule: stop after a one-off review, but continue already-authorized SDD tasks and bounded fix rounds. Findings do not authorize work outside that scope.
+
+Preserve actionable errors and apply that contract's failure policy. Distinguish result-fetch failure, infrastructure failure, user cancellation, and task-level outcomes before retrieval, retry, or stopping. Never invent a substitute answer or implement a failed rescue task directly. Report invocation stderr and exit status; for missing Codex or authentication, direct the user to `/codex:setup`.

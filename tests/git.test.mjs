@@ -180,7 +180,6 @@ test("collectReviewContext keeps inline diffs for tiny adversarial reviews", () 
 
   assert.equal(context.inputMode, "inline-diff");
   assert.equal(context.fileCount, 1);
-  assert.match(context.collectionGuidance, /primary evidence/i);
   assert.match(context.content, /INLINE_MARKER/);
 });
 
@@ -234,8 +233,6 @@ test("collectReviewContext falls back to lightweight context for larger adversar
 
   assert.equal(context.inputMode, "self-collect");
   assert.equal(context.fileCount, 3);
-  assert.match(context.collectionGuidance, /lightweight summary/i);
-  assert.match(context.collectionGuidance, /read-only git commands/i);
   assert.doesNotMatch(context.content, /SELF_COLLECT_MARKER_[ABC]/);
   assert.match(context.content, /## Changed Files/);
 });

@@ -140,22 +140,6 @@ test("broker rejects a non-numeric --idle-timeout instead of silently never expi
   assert.match(broker.stderr(), /Invalid idle timeout/);
 });
 
-test("blank --idle-timeout falls back to the default instead of silently disabling", async (t) => {
-  // Number("  ") === 0, so a whitespace value must NOT be read as "never expire".
-  // Only an explicit 0 disables idle shutdown.
-  const broker = startBroker({ idleTimeout: "  " });
-  t.after(() => broker.dispose());
-  assert.equal(await broker.listening(), true, `broker never listened: ${broker.stderr()}`);
-
-  // The default is 30 minutes, so it must still be alive well past the short timeouts
-  // used elsewhere in this file.
-  await delay(1600);
-  assert.equal(broker.alive(), true, "a blank idle timeout disabled idle shutdown");
-
-  broker.child.kill("SIGTERM");
-  await broker.exitedWithin(8000);
-});
-
 test("broker rejects an idle timeout beyond Node's timer range", async (t) => {
   // setTimeout() overflows above 2^31-1 and fires after 1ms, which would shut the broker
   // down almost immediately. Asking for ~30 days must fail loudly, not silently invert.

@@ -1,71 +1,49 @@
 # Codex Prompt Recipes
 
-Use these as starting templates for Codex task prompts or other Codex/GPT-5.4 prompt construction.
-Copy the smallest recipe that fits the task, then trim anything you do not need.
-In `codex:codex-rescue`, run diagnosis and fix-oriented recipes in write mode by default unless the user explicitly asked for read-only behavior.
+These are task-body fragments for Codex workers, not complete dispatch prompts. Prepend the [Worker Envelope](prompt-blocks.md#worker-envelope) to every fresh or resumed dispatch and retain its language contract when trimming. Follow the [assembly checklist](../SKILL.md#prompt-assembly), including `missing_context_gating` from [Prompt Blocks](prompt-blocks.md#missing_context_gating). Supply the actual paths, inputs, scope, and acceptance checks before dispatch.
 
 ## Diagnosis
 
 ```xml
 <task>
-Diagnose why the failing test or command is breaking in this repository.
-Use the available repository context and tools to identify the most likely root cause.
+Diagnose the supplied failing test or command in this repository.
+Identify the root cause from repository context and tool evidence.
 </task>
 
 <compact_output_contract>
-Return a compact diagnosis with:
+Return:
 1. most likely root cause
 2. evidence
 3. smallest safe next step
+4. unresolved uncertainty
 </compact_output_contract>
 
-<default_follow_through_policy>
-Keep going until you have enough evidence to identify the root cause confidently.
-Only stop to ask questions when a missing detail changes correctness materially.
-</default_follow_through_policy>
-
 <verification_loop>
-Before finalizing, verify that the proposed root cause matches the observed evidence.
+Verify that the proposed root cause explains the observed failure.
 </verification_loop>
-
-<missing_context_gating>
-Do not guess missing repository facts.
-If required context is absent, state exactly what remains unknown.
-</missing_context_gating>
 ```
 
 ## Narrow Fix
 
 ```xml
 <task>
-Implement the smallest safe fix for the identified issue in this repository.
-Preserve existing behavior outside the failing path.
+Implement the smallest fix for the identified issue.
+Preserve behavior outside the failing path.
 </task>
 
 <structured_output_contract>
 Return:
-1. summary of the fix
-2. touched files
-3. verification performed
-4. residual risks or follow-ups
+1. fix summary and touched files
+2. validation commands and results
+3. remaining risks and unverified behavior
 </structured_output_contract>
 
-<default_follow_through_policy>
-Default to the most reasonable low-risk interpretation and keep going.
-</default_follow_through_policy>
-
 <completeness_contract>
-Resolve the task fully before stopping.
-Do not stop after identifying the issue without applying the fix.
+Complete the fix and its required validation before reporting.
 </completeness_contract>
 
-<verification_loop>
-Before finalizing, verify that the fix matches the task requirements and that the changed code is coherent.
-</verification_loop>
-
 <action_safety>
-Keep changes tightly scoped to the stated task.
-Avoid unrelated refactors or cleanup.
+Keep changes within the stated scope; avoid unrelated refactors or cleanup.
 </action_safety>
 ```
 
@@ -73,54 +51,40 @@ Avoid unrelated refactors or cleanup.
 
 ```xml
 <task>
-Analyze this change for the most likely correctness or regression issues.
-Focus on the provided repository context only.
+Review the supplied change for material correctness and regression issues.
+Use the stated repository and diff boundaries.
 </task>
 
 <structured_output_contract>
-Return:
-1. findings ordered by severity
-2. supporting evidence for each finding
-3. brief next steps
+Return findings ordered by severity, each with file and line evidence and the failing scenario.
+If no findings remain, say so and identify the validation limits.
 </structured_output_contract>
 
 <grounding_rules>
-Ground every claim in the repository context or tool outputs.
-If a point is an inference, label it clearly.
+Distinguish observed defects from hypotheses and verify each finding against the code.
 </grounding_rules>
 
 <dig_deeper_nudge>
-Check for second-order failures, empty-state handling, retries, stale state, and rollback paths before finalizing.
+Inspect relevant empty states, retries, stale state, cleanup, and rollback paths.
 </dig_deeper_nudge>
-
-<verification_loop>
-Before finalizing, verify that each finding is material and actionable.
-</verification_loop>
 ```
 
 ## Research Or Recommendation
 
 ```xml
 <task>
-Research the available options and recommend the best path for this task.
+Research the available options and recommend a path for the stated requirements.
 </task>
 
 <structured_output_contract>
 Return:
-1. observed facts
-2. reasoned recommendation
-3. tradeoffs
-4. open questions
+1. observed facts and sources
+2. recommendation and supporting reasoning
+3. tradeoffs and unresolved questions
 </structured_output_contract>
 
-<research_mode>
-Separate observed facts, reasoned inferences, and open questions.
-Prefer breadth first, then go deeper only where the evidence changes the recommendation.
-</research_mode>
-
 <citation_rules>
-Back important claims with explicit references to the sources you inspected.
-Prefer primary sources.
+Cite the sources inspected for important claims; prefer primary sources.
 </citation_rules>
 ```
 
@@ -128,23 +92,17 @@ Prefer primary sources.
 
 ```xml
 <task>
-Diagnose why this existing prompt is underperforming and propose the smallest high-leverage changes to improve it for Codex or GPT-5.4.
+Diagnose the supplied prompt failures and propose the smallest changes supported by those examples.
 </task>
 
 <structured_output_contract>
 Return:
-1. failure modes
-2. root causes in the current prompt
-3. a revised prompt
-4. why the revision should work better
+1. evidenced failure modes and their causes
+2. one revised prompt
+3. how the revision addresses those failures
 </structured_output_contract>
 
-<grounding_rules>
-Base your diagnosis on the prompt text and the failure examples provided.
-Do not invent failure modes that are not supported by the examples.
-</grounding_rules>
-
 <verification_loop>
-Before finalizing, make sure the revised prompt resolves the cited failure modes without adding contradictory instructions.
+Check the revised prompt against the failure examples and remove contradictory instructions.
 </verification_loop>
 ```

@@ -12,8 +12,8 @@ Use at the start of every controller-dispatched worker prompt.
 ```text
 [Claude-Orchestrated Task]
 <language_contract>
-Use Korean for live in-session communication.
-Use English for controller-consumed output, including the final report.
+Use Korean for live in-session communication: status updates, progress narration, and any questions.
+Use English for controller-consumed output: the final response and any report files.
 </language_contract>
 ```
 
@@ -33,15 +33,7 @@ Describe the concrete job, the relevant repository or failure context, and the e
 
 ### `structured_output_contract`
 
-Use when the response shape matters.
-
-```xml
-<structured_output_contract>
-Return exactly the requested output shape and nothing else.
-Keep the answer compact.
-Put the highest-value findings or decisions first.
-</structured_output_contract>
-```
+Before dispatch, write the exact required sections or JSON fields, their order, and any report path inside `structured_output_contract`. For schema-bound output, also pass `--output-schema <file>` as a runtime control. The task-body recipes contain concrete section lists to adapt.
 
 ### `compact_output_contract`
 
@@ -58,12 +50,11 @@ Do not include long scene-setting or repeated recap.
 
 ### `default_follow_through_policy`
 
-Use when Codex should act without asking routine questions.
+Use for a task-specific follow-through default; missing facts and uncertainty belong to `missing_context_gating`.
 
 ```xml
 <default_follow_through_policy>
 Default to the most reasonable low-risk interpretation and keep going.
-Only stop to ask questions when a missing detail changes correctness, safety, or an irreversible action.
 </default_follow_through_policy>
 ```
 
@@ -98,9 +89,9 @@ Use when Codex might otherwise guess.
 
 ```xml
 <missing_context_gating>
-Do not stop to ask routine questions.
+Do not ask questions.
 Retrieve missing repository facts with tools when possible.
-When uncertainty remains, state the assumption taken and proceed, or record the uncertainty in the final report.
+When uncertainty remains, state a bounded assumption and proceed, or record the blocker in the final report without taking an unsafe action.
 Abort only when ambiguity would make an irreversible or destructive action unsafe.
 </missing_context_gating>
 ```
@@ -140,17 +131,6 @@ Keep changes tightly scoped to the stated task.
 Avoid unrelated refactors, renames, or cleanup unless they are required for correctness.
 Call out any risky or irreversible action before taking it.
 </action_safety>
-```
-
-### `tool_persistence_rules`
-
-Use for long-running tool-heavy tasks.
-
-```xml
-<tool_persistence_rules>
-Keep using tools until you have enough evidence to finish the task confidently.
-Do not abandon the workflow after a partial read when another targeted check would change the answer.
-</tool_persistence_rules>
 ```
 
 ## Task-Specific Blocks

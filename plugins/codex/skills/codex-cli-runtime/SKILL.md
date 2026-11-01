@@ -6,50 +6,32 @@ user-invocable: false
 
 # Codex Runtime
 
-Use this skill only inside the `codex:codex-rescue` subagent.
+Use this skill only inside the explicitly invoked `codex:codex-rescue` subagent.
 
-Primary helper:
-- `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task "<raw arguments>"`
+## Invocation
 
-Execution rules:
-- The rescue subagent is a forwarder, not an orchestrator. Its only job is to invoke `task` once and return that stdout unchanged.
-- Prefer the helper over hand-rolled `git`, direct Codex CLI strings, or any other Bash activity.
-- Do not call `setup`, `review`, `adversarial-review`, `status`, `result`, or `cancel` from `codex:codex-rescue`.
-- Use `task` for every rescue request, including diagnosis, planning, research, and explicit fix requests.
-- You may use the `codex-prompting` skill only to assemble the controller envelope around the user's verbatim task text before the single `task` call.
-- That envelope assembly is the only Claude-side work allowed. Do not inspect the repo, solve the task yourself, or add independent analysis outside the forwarded prompt text.
-- Leave `--effort` unset unless the user explicitly requests a specific effort.
-- Leave model unset by default. Add `--model` only when the user explicitly asks for one.
-- Map `spark` to `--model gpt-5.3-codex-spark`.
-- Leave sandbox flags unset by default so Codex inherits `sandbox_mode` from `config.toml`; on the operator's machine this resolves to `danger-full-access`. Add `--read-only` only to pin a read-only sandbox, or `--write` only to pin `workspace-write`.
+Use exactly one `Bash` call to invoke `task`:
 
-Command selection:
-- Use exactly one `task` invocation per rescue handoff.
-- If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
-- If the forwarded request includes `--model`, normalize `spark` to `gpt-5.3-codex-spark` and pass it through to `task`.
-- If the forwarded request includes `--effort`, pass it through to `task`.
-- If the forwarded request includes `--output-schema <file>`, strip both tokens from the task text and pass them through to `task`. The file resolves against the command cwd and must contain a JSON object; it is passed to Codex as the turn's output schema. It works with fresh or resumed tasks, including runtime background tasks.
-- If the forwarded request includes `--thread-title <text>`, strip both tokens from the task text and pass them through to `task` as a runtime control. It sets or renames the thread to `Codex Companion Task: <text>` after trimming, collapsing whitespace, and shortening to 56 characters; a blank title uses the existing naming behavior.
-- If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
-- If the forwarded request includes `--resume-thread <thread-id>`, strip both tokens from the task text and pass them through to `task`.
-- If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
-- `--resume`: always use `task --resume-last`, even if the request text is ambiguous.
-- `--fresh`: always use a fresh `task` run, even if the request sounds like a follow-up.
-- `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. Not every model supports every value; Codex validates the value against the reasoning levels the selected model advertises.
-- `task --resume-last`: same-Claude-session convenience for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run. Jobs are filtered to the current Claude session, so it fails when no resumable task is visible there.
-- `task --resume-thread <thread-id>`: durable route for resuming a known Codex thread across Claude sessions.
-- Every resume reads the thread's working directory before resuming or renaming it. The runtime refuses missing or unusable working directories and threads whose canonical workspace root differs from the current workspace; there is no override.
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task -- "<composed prompt>"
+```
 
-Runtime output:
-- `status` and `result` both accept `--json`.
-- Job records echo the resolved `{ model, modelProvider, reasoningEffort, sandbox, approvalPolicy }` settings.
-- Tasks using `--output-schema` record `resultContract` separately from runtime completion. Local checks parse JSON, allow a whole-message fence, require an object, and check top-level required keys; Codex enforces the remaining schema constraints. Raw output is preserved, and an invalid contract does not change a completed job to failed.
-- `result` and single-job `status` show `Result contract: valid`, optionally followed by ` — status <status>`, or `Result contract: invalid (<error>)`. Status listings append `[contract valid]` or `[contract invalid]`; JSON output preserves the contract object.
-- Job logs emit a `Thinking.` line when a Codex reasoning block starts.
+Pass runtime controls as separate argv elements before `--`, then one shell-quoted composed prompt operand. Never pass the composed envelope as the lone raw-arguments operand: that form reparses whitespace, quotes, and embedded option tokens.
 
-Safety rules:
-- Leave sandbox selection to `config.toml` unless the user explicitly pins it with `--read-only` or `--write`.
-- Preserve the user's task text verbatim inside the controller envelope after removing control flags and their values.
-- Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
-- Return the stdout of the `task` command exactly as-is.
-- If the Bash call fails or Codex cannot be invoked, return nothing.
+The rescue command selects foreground or background Agent execution and passes the resolved mode in the handoff. Honor it without reconsidering task complexity. Strip `--background` and `--wait` from the forwarded request; they control Claude-side execution on this path, not the `task` call.
+
+## Runtime controls
+
+- Leave model and effort unset unless explicitly requested. Pass `--model` and `--effort` through; normalize `spark` to `gpt-5.3-codex-spark`. Effort values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`; Codex validates model support.
+- Leave sandbox flags unset to inherit `config.toml`. Preserve an explicit `--read-only` or `--write` pin.
+- Pass `--output-schema <file>` through. It resolves against the command cwd, must contain a JSON object, and supplies the turn's output schema for fresh or resumed tasks.
+- Pass `--thread-title <text>` through to set or rename the thread. The runtime trims, collapses whitespace, and shortens it to 56 characters; a blank title retains default naming behavior.
+- Map `--resume` to `--resume-last`; preserve explicit `--resume-thread <thread-id>`. When more than one task exists in the Claude session, the controller must supply the intended task's `--resume-thread <thread-id>` instead of implicit latest-task selection.
+- `--resume-last` is scoped to the current Claude session. `--resume-thread <thread-id>` also works across sessions in the same workspace. Every resume checks the thread's canonical workspace before resuming or renaming it; missing, unusable, or different workspace roots are refused.
+- `--fresh` selects a fresh task. Use the route resolved by the command rather than inferring another route from the task text.
+
+## Forwarding
+
+Use `codex-prompting` only to assemble its mandatory [Worker Envelope](../codex-prompting/references/prompt-blocks.md#worker-envelope) and `missing_context_gating` around the user's task text. Preserve that text verbatim after removing runtime controls and their values.
+
+Do not inspect the repository, solve the task, run other helper commands, monitor progress, fetch results, cancel jobs, or perform follow-up work. Return the task stdout unchanged to the controller, without commentary. If invocation fails, return the actionable stderr lines and exit status without generating a substitute task answer.

@@ -511,6 +511,19 @@ rl.on("line", (line) => {
 
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
 
+        if (BEHAVIOR === "final-answer-close") {
+          const finalMessage = {
+            method: "item/completed",
+            params: {
+              threadId: thread.id,
+              turnId,
+              item: { type: "agentMessage", id: "msg_" + turnId, text: "Final answer before close.", phase: "final_answer" }
+            }
+          };
+          process.stdout.end(JSON.stringify(finalMessage) + "\\n", () => process.exit(0));
+          break;
+        }
+
         if (BEHAVIOR === "transport-loss") {
           send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
           send({

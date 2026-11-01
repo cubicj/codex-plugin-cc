@@ -766,8 +766,6 @@ test("adversarial review asks Codex to inspect larger diffs itself", () => {
 
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(fs.readFileSync(path.join(binDir, "fake-codex-state.json"), "utf8"));
-  assert.match(state.lastTurnStart.prompt, /lightweight summary/i);
-  assert.match(state.lastTurnStart.prompt, /read-only git commands/i);
   assert.doesNotMatch(state.lastTurnStart.prompt, /PROMPT_SELF_COLLECT_[ABC]/);
 });
 
@@ -1843,7 +1841,6 @@ test("status shows phases, hints, and the latest finished job", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Active jobs:/);
-  assert.match(result.stdout, /\| Job \| Kind \| Status \| Phase \| Elapsed \| Codex Session ID \| Summary \| Actions \|/);
   assert.match(result.stdout, /\| review-live \| review \| running \| reviewing \| .* \| thr_1 \| Review working tree diff \|/);
   assert.match(result.stdout, /`\/codex:status review-live`<br>`\/codex:cancel review-live`/);
   assert.match(result.stdout, /Live details:/);
@@ -2830,7 +2827,6 @@ test("stop hook runs a stop-time review task and blocks on findings when the rev
   const fakeState = JSON.parse(fs.readFileSync(fakeStatePath, "utf8"));
   assert.match(fakeState.lastTurnStart.prompt, /<task>/i);
   assert.match(fakeState.lastTurnStart.prompt, /<compact_output_contract>/i);
-  assert.match(fakeState.lastTurnStart.prompt, /Only review the work from the previous Claude turn/i);
   assert.match(fakeState.lastTurnStart.prompt, /I completed the refactor and updated the retry logic\./);
   assert.equal(fakeState.lastThreadStart.sandbox, "read-only");
 

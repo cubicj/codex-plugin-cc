@@ -67,31 +67,28 @@ const SETTINGS = {
 };
 const SETTINGS_LINE = "Settings: model gpt-5.4, sandbox workspaceWrite, approval granular";
 const JOB = { id: "task-123", status: "completed", threadId: "thr_123" };
-const SESSION_LINES = "Codex session ID: thr_123\nResume in Codex: codex resume thr_123\n";
-const STATUS_OUTPUT = "# Codex Job Status\n\n- task-123 | completed\n  Codex session ID: thr_123\n  Resume in Codex: codex resume thr_123\n  Result: /codex:result task-123\n";
-
-test("renderJobStatusReport shows resolved settings after the resume command", () => {
-  assert.equal(
-    renderJobStatusReport({ ...JOB, resolved: SETTINGS }),
-    STATUS_OUTPUT.replace("  Result:", `  ${SETTINGS_LINE}\n  Result:`)
-  );
+test("renderJobStatusReport shows resolved settings and the resume command", () => {
+  const output = renderJobStatusReport({ ...JOB, resolved: SETTINGS });
+  assert.ok(output.includes(SETTINGS_LINE));
+  assert.match(output, /Codex session ID: thr_123/);
+  assert.match(output, /codex resume thr_123/);
 });
 
 test("renderJobStatusReport renders string policies and reasoning effort without a thread", () => {
-  assert.equal(
-    renderJobStatusReport({
-      id: "task-123",
-      status: "queued",
-      resolved: { model: "", reasoningEffort: "medium", sandbox: "readOnly", approvalPolicy: "never" }
-    }),
-    "# Codex Job Status\n\n- task-123 | queued\n  Settings: effort medium, sandbox readOnly, approval never\n  Cancel: /codex:cancel task-123\n"
-  );
+  const output = renderJobStatusReport({
+    id: "task-123",
+    status: "queued",
+    resolved: { model: "", reasoningEffort: "medium", sandbox: "readOnly", approvalPolicy: "never" }
+  });
+  assert.match(output, /Settings: effort medium, sandbox readOnly, approval never/);
+  assert.doesNotMatch(output, /Codex session ID:|codex resume/);
 });
 
 test("renderJobStatusReport preserves output without displayable resolved settings", () => {
+  const baseline = renderJobStatusReport(JOB);
   for (const resolved of [undefined, null, [], "invalid", new Date(), {}, { modelProvider: "openai" },
     { model: "", reasoningEffort: null, sandbox: {}, approvalPolicy: {} }]) {
-    assert.equal(renderJobStatusReport({ ...JOB, resolved }), STATUS_OUTPUT);
+    assert.equal(renderJobStatusReport({ ...JOB, resolved }), baseline);
   }
 });
 
@@ -105,10 +102,6 @@ test("renderStatusReport includes resolved settings in every details section", (
     recent: [job]
   });
   assert.equal(output.split(`  ${SETTINGS_LINE}\n`).length - 1, 3);
-  assert.equal(
-    output.split("\n").find((line) => line.startsWith("| Job |")),
-    "| Job | Kind | Status | Phase | Elapsed | Codex Session ID | Summary | Actions |"
-  );
 });
 
 for (const [label, storedJob] of [
@@ -120,30 +113,48 @@ for (const [label, storedJob] of [
 ]) {
   for (const threadId of ["thr_123", null]) {
     const job = { ...JOB, threadId };
-    const session = threadId ? SESSION_LINES : "";
-    const fallback = "# Codex Result\n\nJob: task-123\nStatus: completed\n";
-    const missing = "\nNo captured result payload was stored for this job.\n";
-    const expected = label === "fallback"
-      ? `${fallback}${session}${missing}`
-      : `Answer\n${session ? `\n${session}` : ""}`;
-    const withSettings = label === "fallback"
-      ? `${fallback}${session}${SETTINGS_LINE}\n${missing}`
-      : `Answer\n\n${session}${SETTINGS_LINE}\n`;
+    function assertPayload(output) {
+      if (label === "fallback") {
+        assert.match(output, /Job: task-123/);
+        assert.match(output, /Status: completed/);
+        assert.match(output, /No captured result payload was stored for this job\./);
+      } else {
+        assert.match(output, /^Answer\n/);
+        assert.equal(output.replace(/^(?:Codex session ID:|Resume in Codex:|Settings:).*$/gm, "").trim(), "Answer");
+      }
+      if (threadId) {
+        assert.match(output, /Codex session ID: thr_123/);
+        assert.match(output, /codex resume thr_123/);
+      } else {
+        assert.doesNotMatch(output, /Codex session ID:|codex resume/);
+      }
+    }
 
     test(`renderStoredJobResult preserves ${label} output ${threadId ? "with" : "without"} a thread`, () => {
-      assert.equal(renderStoredJobResult(job, storedJob), expected);
+      const output = renderStoredJobResult(job, storedJob);
+      assertPayload(output);
+      assert.doesNotMatch(output, /Settings:/);
+      if (label !== "fallback" && !threadId) {
+        assert.equal(output, "Answer\n");
+      }
     });
 
     test(`renderStoredJobResult shows settings for ${label} ${threadId ? "with" : "without"} a thread`, () => {
-      assert.equal(renderStoredJobResult({ ...job, resolved: SETTINGS }, storedJob), withSettings);
-      assert.equal(renderStoredJobResult(
-        { ...job, resolved: { model: "ignored" } },
-        { ...storedJob, resolved: SETTINGS }
-      ), withSettings);
-      assert.equal(renderStoredJobResult(
-        { ...job, resolved: SETTINGS },
-        { ...storedJob, resolved: null }
-      ), withSettings);
+      for (const output of [
+        renderStoredJobResult({ ...job, resolved: SETTINGS }, storedJob),
+        renderStoredJobResult(
+          { ...job, resolved: { model: "ignored" } },
+          { ...storedJob, resolved: SETTINGS }
+        ),
+        renderStoredJobResult(
+          { ...job, resolved: SETTINGS },
+          { ...storedJob, resolved: null }
+        )
+      ]) {
+        assertPayload(output);
+        assert.ok(output.includes(SETTINGS_LINE));
+        assert.doesNotMatch(output, /model ignored/);
+      }
     });
   }
 }

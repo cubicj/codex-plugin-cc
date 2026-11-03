@@ -534,6 +534,7 @@ async function executeTaskRun(request) {
   const write = Boolean(request.write) || result.sandbox?.type !== "readOnly";
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
   const failureMessage = result.error?.message ?? result.stderr ?? "";
+  const errorMessage = result.status !== 0 ? String(result.error?.message ?? "").trim() : "";
   const contractFields = request.outputSchemaPath
     ? { resultContract: evaluateTaskResultContract(request.outputSchemaPath, outputSchema, result) }
     : {};
@@ -541,6 +542,7 @@ async function executeTaskRun(request) {
     {
       rawOutput,
       failureMessage,
+      errorMessage,
       reasoningSummary: result.reasoningSummary
     },
     {
@@ -562,6 +564,7 @@ async function executeTaskRun(request) {
   return {
     exitStatus: result.status,
     ...contractFields,
+    ...(errorMessage ? { errorMessage } : {}),
     threadId: result.threadId,
     turnId: result.turnId,
     resolved: result.resolved,

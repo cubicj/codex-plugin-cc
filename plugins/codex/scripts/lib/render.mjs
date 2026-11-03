@@ -360,10 +360,17 @@ export function renderNativeReviewResult(result, meta) {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
+function formatTurnOutput(rawOutput, errorMessage) {
+  if (errorMessage) {
+    return `${rawOutput.trimEnd()}\n\nTurn failed: ${errorMessage}\n`;
+  }
+  return rawOutput.endsWith("\n") ? rawOutput : `${rawOutput}\n`;
+}
+
 export function renderTaskResult(parsedResult, meta) {
   const rawOutput = typeof parsedResult?.rawOutput === "string" ? parsedResult.rawOutput : "";
   if (rawOutput) {
-    return rawOutput.endsWith("\n") ? rawOutput : `${rawOutput}\n`;
+    return formatTurnOutput(rawOutput, parsedResult.errorMessage);
   }
 
   const message = String(parsedResult?.failureMessage ?? "").trim() || "Codex did not return a final message.";
@@ -488,7 +495,10 @@ export function renderStoredJobResult(job, storedJob, recovered = null) {
     (hasText(storedJob?.result?.codex?.stdout) && storedJob.result.codex.stdout) ||
     "";
   if (rawOutput) {
-    const output = rawOutput.endsWith("\n") ? rawOutput : `${rawOutput}\n`;
+    const errorMessage = hasText(storedJob?.result?.rawOutput) && (storedJob?.status ?? job.status) === "failed"
+      ? storedJob?.errorMessage ?? job.errorMessage
+      : "";
+    const output = formatTurnOutput(rawOutput, errorMessage);
     return `${output}${suffix}`;
   }
 

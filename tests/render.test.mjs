@@ -1,7 +1,62 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { renderJobStatusReport, renderReviewResult, renderStatusReport, renderStoredJobResult } from "../plugins/codex/scripts/lib/render.mjs";
+import { renderJobStatusReport, renderReviewResult, renderStatusReport, renderStoredJobResult, renderTaskResult } from "../plugins/codex/scripts/lib/render.mjs";
+
+test("renderTaskResult appends a turn error after the final message", () => {
+  assert.equal(
+    renderTaskResult({ rawOutput: "Final answer before close. \n\n", errorMessage: "git merge-base rejected a tree object" }),
+    "Final answer before close.\n\nTurn failed: git merge-base rejected a tree object\n"
+  );
+});
+
+test("renderTaskResult preserves failure fallback without a final message", () => {
+  assert.equal(
+    renderTaskResult({ rawOutput: "", failureMessage: " git merge-base rejected a tree object\n", errorMessage: "git merge-base rejected a tree object" }),
+    "git merge-base rejected a tree object\n"
+  );
+  assert.equal(
+    renderTaskResult({ rawOutput: "", errorMessage: "Ignored without failureMessage" }),
+    "Codex did not return a final message.\n"
+  );
+});
+
+test("renderStoredJobResult appends a failed turn error once before the footer", () => {
+  for (const [job, storedFields] of [
+    [{ status: "completed", errorMessage: "Ignored index error" }, { status: "failed", errorMessage: "git merge-base rejected a tree object" }],
+    [{ status: "failed", errorMessage: "git merge-base rejected a tree object" }, {}]
+  ]) {
+    assert.equal(
+      renderStoredJobResult(job, {
+        ...storedFields,
+        threadId: "thr_123",
+        result: { rawOutput: "Final answer before close. \n\n" },
+        rendered: "Final answer before close.\n\nTurn failed: git merge-base rejected a tree object\n"
+      }),
+      "Final answer before close.\n\nTurn failed: git merge-base rejected a tree object\n\nCodex session ID: thr_123\nResume in Codex: codex resume thr_123\n"
+    );
+  }
+});
+
+test("renderStoredJobResult preserves completed raw output despite an index error", () => {
+  assert.equal(
+    renderStoredJobResult(
+      { status: "failed", errorMessage: "Ignored index error" },
+      { status: "completed", result: { rawOutput: "Final answer. \n\n" } }
+    ),
+    "Final answer. \n\n"
+  );
+});
+
+test("renderStoredJobResult preserves native stdout for a failed job", () => {
+  assert.equal(
+    renderStoredJobResult(
+      { status: "failed", errorMessage: "Native review error" },
+      { result: { codex: { stdout: "Native review output. \n\n" } } }
+    ),
+    "Native review output. \n\n"
+  );
+});
 
 test("renderReviewResult degrades gracefully when JSON is missing required review fields", () => {
   const output = renderReviewResult(

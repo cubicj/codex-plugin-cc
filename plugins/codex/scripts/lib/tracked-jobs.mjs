@@ -164,10 +164,12 @@ export async function runTrackedJob(job, runner, options = {}) {
     const execution = await runner();
     const completionStatus = execution.exitStatus === 0 ? "completed" : "failed";
     const contractFields = execution.resultContract ? { resultContract: execution.resultContract } : {};
+    const errorFields = execution.errorMessage ? { errorMessage: execution.errorMessage } : {};
     const completedAt = nowIso();
     writeJobFile(job.workspaceRoot, job.id, {
       ...runningRecord,
       ...contractFields,
+      ...errorFields,
       status: completionStatus,
       threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null,
@@ -182,6 +184,7 @@ export async function runTrackedJob(job, runner, options = {}) {
     upsertJob(job.workspaceRoot, {
       id: job.id,
       ...contractFields,
+      ...errorFields,
       status: completionStatus,
       threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null,

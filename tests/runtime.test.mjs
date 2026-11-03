@@ -3278,23 +3278,34 @@ for (const behavior of ["final-error-close", "error-final-close"]) {
     const repo = makeTempDir();
     const binDir = makeTempDir();
     installFakeCodex(binDir, behavior);
+    const env = buildEnv(binDir);
 
     const result = run("node", [SCRIPT, "task", "check error precedence"], {
       cwd: repo,
-      env: buildEnv(binDir),
+      env,
       timeout: 5000
     });
 
     assert.equal(result.signal, null, result.stderr);
     assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, "Final answer before close.\n\nTurn failed: git merge-base rejected a tree object\n");
     const stored = readPersistedJob(repo);
     assert.equal(stored.status, "failed");
     assert.equal(stored.result.status, 1);
     assert.equal(stored.result.error.message, "git merge-base rejected a tree object");
+    assert.equal(stored.errorMessage, "git merge-base rejected a tree object");
+    assert.equal(stored.rendered, result.stdout);
+    const state = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
+    assert.equal(state.jobs.find((job) => job.id === stored.id).errorMessage, "git merge-base rejected a tree object");
     assert.match(result.stderr, /git merge-base rejected a tree object/);
     const log = fs.readFileSync(stored.logFile, "utf8");
     assert.doesNotMatch(log, /Turn completion inferred/);
     assert.match(log, /Final answer before close/);
+    assert.match(log, /Final output\nFinal answer before close\.\n\nTurn failed: git merge-base rejected a tree object\n/);
+    const retrieved = run("node", [SCRIPT, "result", stored.id], { cwd: repo, env, timeout: 5000 });
+    assert.equal(retrieved.status, 0, retrieved.stderr);
+    assert.match(retrieved.stdout, /^Final answer before close\.\n\nTurn failed: git merge-base rejected a tree object\n/);
+    assert.equal(retrieved.stdout.split("git merge-base rejected a tree object").length - 1, 1);
   });
 }
 
@@ -3314,13 +3325,18 @@ test("task infers success after a retryable error and final answer", () => {
   const stored = readPersistedJob(repo);
   assert.equal(stored.status, "completed");
   assert.equal(stored.result.status, 0);
+  assert.equal(Object.hasOwn(stored, "errorMessage"), false);
+  const state = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
+  assert.equal(Object.hasOwn(state.jobs.find((job) => job.id === stored.id), "errorMessage"), false);
   assert.match(fs.readFileSync(stored.logFile, "utf8"), /Turn completion inferred/);
+  assert.match(fs.readFileSync(stored.logFile, "utf8"), /Final output\nFinal answer before close\.\n$/);
 });
 
 test("task terminates when app-server emits a non-retryable turn error", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "terminal-error");
+  const env = buildEnv(binDir);
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
   run("git", ["add", "README.md"], { cwd: repo });
@@ -3328,7 +3344,7 @@ test("task terminates when app-server emits a non-retryable turn error", () => {
 
   const result = run("node", [SCRIPT, "task", "trigger terminal error"], {
     cwd: repo,
-    env: buildEnv(binDir),
+    env,
     timeout: 5000
   });
 
@@ -3336,6 +3352,7 @@ test("task terminates when app-server emits a non-retryable turn error", () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /git merge-base rejected a tree object/);
   assert.match(result.stdout, /git merge-base rejected a tree object/);
+  assert.equal(result.stdout, "git merge-base rejected a tree object\n");
 
   const stateDir = resolveStateDir(repo);
   const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
@@ -3346,6 +3363,14 @@ test("task terminates when app-server emits a non-retryable turn error", () => {
   assert.equal(stored.result.status, 1);
   assert.equal(stored.result.error.message, "git merge-base rejected a tree object");
   assert.match(stored.rendered, /git merge-base rejected a tree object/);
+  assert.equal(stored.result.rawOutput, "");
+  assert.equal(stored.rendered, result.stdout);
+  assert.equal(stored.errorMessage, "git merge-base rejected a tree object");
+  assert.equal(state.jobs[0].errorMessage, "git merge-base rejected a tree object");
+  const retrieved = run("node", [SCRIPT, "result", stored.id], { cwd: repo, env, timeout: 5000 });
+  assert.equal(retrieved.status, 0, retrieved.stderr);
+  assert.match(retrieved.stdout, /^git merge-base rejected a tree object\n/);
+  assert.equal(retrieved.stdout.split("git merge-base rejected a tree object").length - 1, 1);
 });
 
 for (const behavior of ["terminal-error-buffered", "terminal-error-then-completed"]) {

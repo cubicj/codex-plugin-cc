@@ -288,6 +288,20 @@ rl.on("line", (line) => {
 
   const message = JSON.parse(line);
   const state = loadState();
+  if (BEHAVIOR === "thread-writer-lock" && message.method === "thread/resume") {
+    const writer = state.threadWriters?.[message.params.threadId];
+    let writerAlive = false;
+    if (writer && writer !== process.pid) {
+      try {
+        process.kill(writer, 0);
+        writerAlive = true;
+      } catch {}
+    }
+    if (writerAlive) {
+      send({ id: message.id, error: { code: -32600, message: "thread " + message.params.threadId + " already has an active writer" } });
+      return;
+    }
+  }
   state.requests ??= [];
   state.requests.push({ method: message.method, params: message.params });
   saveState(state);
@@ -324,6 +338,10 @@ rl.on("line", (line) => {
         state.lastThreadStartApprovalPolicy = message.params.approvalPolicy;
         state.lastThreadStart = { ...message.params };
         const thread = nextThread(state, message.params.cwd, message.params.ephemeral);
+        if (BEHAVIOR === "thread-writer-lock") {
+          state.threadWriters ??= {};
+          state.threadWriters[thread.id] = process.pid;
+        }
         state.lastThreadStart = { ...message.params, threadId: thread.id, model: message.params.model ?? null };
         saveState(state);
         const sandbox = BEHAVIOR === "config-write-sandbox"
@@ -369,6 +387,10 @@ rl.on("line", (line) => {
         }
         state.lastThreadResume = { ...message.params };
         const thread = ensureThread(state, message.params.threadId);
+        if (BEHAVIOR === "thread-writer-lock") {
+          state.threadWriters ??= {};
+          state.threadWriters[thread.id] = process.pid;
+        }
         thread.updatedAt = now();
         saveState(state);
         const sandbox = BEHAVIOR === "resume-ignores-sandbox"
@@ -734,7 +756,10 @@ rl.on("line", (line) => {
           }
         ];
 
-	        if (BEHAVIOR === "interruptible-slow-task") {
+	        if (BEHAVIOR === "thread-writer-lock" && prompt.includes("HOLD-TURN")) {
+	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+	          interruptibleTurns.set(turnId, { threadId: thread.id, timer: null });
+	        } else if (BEHAVIOR === "interruptible-slow-task") {
 	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
 	          const timer = setTimeout(() => {
 	            if (!interruptibleTurns.has(turnId)) {

@@ -51,6 +51,7 @@ const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
 const EXTERNAL_AGENT_IMPORT_COMPLETED = "externalAgentConfig/import/completed";
 const EXTERNAL_AGENT_IMPORT_TIMEOUT_MS = 2 * 60 * 1000;
+const BROKER_WAIT_POLL_MS = 1000;
 
 function cleanCodexStderr(stderr) {
   return stderr
@@ -697,7 +698,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
   }
 }
 
-async function withAppServer(cwd, fn) {
+async function withAppServer(cwd, fn, options = {}) {
   let client = null;
   try {
     client = await CodexAppServerClient.connect(cwd);
@@ -706,8 +707,9 @@ async function withAppServer(cwd, fn) {
     return result;
   } catch (error) {
     const brokerRequested = client?.transport === "broker" || Boolean(process.env[BROKER_ENDPOINT_ENV]);
+    const brokerBusy = client?.transport === "broker" && error?.rpcCode === BROKER_BUSY_RPC_CODE;
     const shouldRetryDirect =
-      (client?.transport === "broker" && error?.rpcCode === BROKER_BUSY_RPC_CODE) ||
+      brokerBusy ||
       (brokerRequested &&
         (error?.code === "ENOENT" || error?.code === "ECONNREFUSED" || error?.code === "ETIMEDOUT"));
 
@@ -723,8 +725,32 @@ async function withAppServer(cwd, fn) {
     const directClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
     try {
       return await fn(directClient);
+    } catch (directError) {
+      if (!brokerBusy || directError?.rpcCode == null || !directError.message?.includes("already has an active writer")) {
+        throw directError;
+      }
     } finally {
       await directClient.close();
+    }
+
+    let waitReported = false;
+    while (true) {
+      client = null;
+      try {
+        client = await CodexAppServerClient.connect(cwd);
+        return await fn(client);
+      } catch (retryError) {
+        if (client?.transport !== "broker" || retryError?.rpcCode !== BROKER_BUSY_RPC_CODE) {
+          throw retryError;
+        }
+      } finally {
+        if (client) await client.close();
+      }
+      if (!waitReported) {
+        waitReported = true;
+        options.onBrokerWait?.();
+      }
+      await new Promise((resolve) => setTimeout(resolve, BROKER_WAIT_POLL_MS));
     }
   }
 }
@@ -1214,11 +1240,15 @@ export async function runAppServerTurn(cwd, options = {}) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
   }
 
+  let resumeReported = false;
   return withAppServer(cwd, async (client) => {
     let response;
 
     if (options.resumeThreadId) {
-      emitProgress(options.onProgress, `Resuming thread ${options.resumeThreadId}.`, "starting");
+      if (!resumeReported) {
+        resumeReported = true;
+        emitProgress(options.onProgress, `Resuming thread ${options.resumeThreadId}.`, "starting");
+      }
       response = await resumeThread(client, options.resumeThreadId, cwd, {
         model: options.model,
         sandbox: options.sandbox,
@@ -1294,6 +1324,12 @@ export async function runAppServerTurn(cwd, options = {}) {
       touchedFiles: collectTouchedFiles(turnState.fileChanges),
       commandExecutions: turnState.commandExecutions
     };
+  }, {
+    onBrokerWait: () => emitProgress(
+      options.onProgress,
+      "Waiting for the shared Codex broker: it is busy with another job and holds this thread.",
+      "starting"
+    )
   });
 }
 

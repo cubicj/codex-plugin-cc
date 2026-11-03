@@ -2596,6 +2596,92 @@ test("cancel sends turn interrupt to the shared app-server before killing a brok
   assert.equal(cleanup.status, 0, cleanup.stderr);
 });
 
+test("resume of a thread held by the busy shared broker waits for the broker instead of failing", async (t) => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "thread-writer-lock");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+  const env = buildEnv(binDir);
+  const stateDir = resolveStateDir(repo);
+  let resume;
+  let resumeClosed = false;
+  t.after(async () => {
+    const statePath = path.join(stateDir, "state.json");
+    if (fs.existsSync(statePath)) {
+      const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+      for (const job of state.jobs) {
+        if (job.status === "running" || job.status === "queued") {
+          run("node", [SCRIPT, "cancel", job.id, "--json"], { cwd: repo, env, timeout: 15000 });
+        }
+      }
+    }
+    if (resume && !resumeClosed) {
+      resume.kill("SIGKILL");
+    }
+    const cleanup = run("node", [SESSION_HOOK, "SessionEnd"], {
+      cwd: repo,
+      env,
+      timeout: 15000,
+      input: JSON.stringify({ hook_event_name: "SessionEnd", cwd: repo })
+    });
+    assert.equal(cleanup.status, 0, cleanup.stderr);
+    if (resume) await waitFor(() => resumeClosed);
+  });
+
+  const first = run("node", [SCRIPT, "task", "--json", "first prompt"], {
+    cwd: repo, env, timeout: 15000
+  });
+  assert.equal(first.status, 0, first.stderr);
+  const firstPayload = JSON.parse(first.stdout);
+  const threadA = firstPayload.threadId;
+  assert.ok(threadA);
+  assert.ok(loadBrokerSession(repo));
+
+  const held = run("node", [SCRIPT, "task", "--background", "--json", "HOLD-TURN keep the broker busy"], {
+    cwd: repo, env, timeout: 15000
+  });
+  assert.equal(held.status, 0, held.stderr);
+  const heldJobId = JSON.parse(held.stdout).jobId;
+  await waitFor(() => {
+    const job = readPersistedJob(repo, heldJobId);
+    return job.status === "running" && job.threadId && job.turnId;
+  }, { timeoutMs: 15000 });
+
+  let stdout = "";
+  let stderr = "";
+  let spawnError;
+  resume = spawn(process.execPath, [SCRIPT, "task", "--json", "--resume-thread", threadA, "follow up"], {
+    cwd: repo, env, stdio: ["ignore", "pipe", "pipe"]
+  });
+  resume.stdout.on("data", (chunk) => { stdout += chunk; });
+  resume.stderr.on("data", (chunk) => { stderr += chunk; });
+  resume.on("error", (error) => { spawnError = error; });
+  resume.on("close", () => { resumeClosed = true; });
+  let resumeLogFile;
+  await waitFor(() => {
+    if (spawnError) throw spawnError;
+    if (resumeClosed) assert.equal(resume.exitCode, 0, stdout + stderr);
+    const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+    resumeLogFile = state.jobs.find((job) => job.id !== firstPayload.jobId && job.id !== heldJobId)?.logFile;
+    return resumeLogFile && fs.readFileSync(resumeLogFile, "utf8").includes("Waiting for the shared Codex broker");
+  }, { timeoutMs: 15000 });
+
+  const cancelled = run("node", [SCRIPT, "cancel", heldJobId, "--json"], {
+    cwd: repo, env, timeout: 15000
+  });
+  assert.equal(cancelled.status, 0, cancelled.stderr);
+  assert.equal(JSON.parse(cancelled.stdout).turnInterrupted, true);
+  await waitFor(() => resumeClosed, { timeoutMs: 15000 });
+  assert.equal(resume.exitCode, 0, stdout + stderr);
+  assert.equal(JSON.parse(stdout).threadId, threadA);
+  assert.doesNotMatch(stdout + stderr, /already has an active writer/);
+  assert.equal(fs.readFileSync(resumeLogFile, "utf8").match(/Waiting for the shared Codex broker/g)?.length, 1);
+  assert.equal(fs.readFileSync(resumeLogFile, "utf8").match(/Resuming thread/g)?.length, 1);
+});
+
 function seedSessionEndJobs(repo, jobs) {
   const stateDir = resolveStateDir(repo);
   fs.mkdirSync(path.join(stateDir, "jobs"), { recursive: true });
